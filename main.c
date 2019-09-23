@@ -7,6 +7,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MAX(a,b) ((a) >= (b) ? (a) : (b))
+
+typedef struct { // chosen settings
+  VkSurfaceFormatKHR surface_format[1];
+  VkPresentModeKHR   present_mode;
+  VkExtent2D         extent;
+} sc_cap_t;
+
 static void init_app_info(VkApplicationInfo* info)
 {
   memset(info, 0, sizeof(*info));
@@ -40,6 +49,21 @@ static uint32_t select_device(VkPhysicalDevice* devs,
 {
   // just pick the first one that has the feautes we need
   // which are, swap chain support, glfw extensions
+}
+
+static sc_cap_t select_caps(VkDevice device,
+                            VkSurface surface)
+{
+  sc_cap_t ret[1];
+  VkSurfaceCapabilities caps[1];
+  vkGetPhysicalDeviceSurfaceCapabilities(device, surface, caps);
+
+  // just taking the "default" for each
+  uint32_t cnt = 1;
+  vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &cnt, ret->surface_format);
+  vkGetPhysicaldevicePresentModesKHR(device, surface, &cnt, ret->present_mode);
+
+  return *ret;
 }
 
 int main()
@@ -142,6 +166,19 @@ int main()
 
   VkQueue present_queue; // owned by device
   vkGetDeviceQueue(device, present_queue_idx, 0, &present_queue);
+
+  sc_cap_t caps = select_caps(device, surface);
+  VkSwapchainCreateInfoKHR sc_create_info[1];
+  sc_create_info->sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  sc_create_info->surface          = surface;
+  sc_create_info->minImageCount    = ;
+  sc_create_info->imageFormat      = VK_FORMAT_B8G8R8A8_UNORM; // FIXME caps
+  sc_create_info->imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; // FIXME caps
+  // FIXME present mode from caps
+  sc_create_info->imageExtent      = caps->extent;
+  sc_create_info->imageArrayLayers = 1;
+  sc_create_info->imageUsage       = VK_IMAGE_USAGE_COLO_ATTACHMENT_BIT; // how are these used
+  sc_create_info->imageSharingMode = ; // need something about the queues
 
   while (!glfwWindowShouldClose(win)) {
     glfwPollEvents();
