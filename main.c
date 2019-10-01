@@ -3,11 +3,16 @@
 #include <vulkan/vulkan_core.h>
 
 #include <assert.h>
+#include <errno.h>
 #include <execinfo.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) >= (b) ? (a) : (b))
@@ -19,6 +24,32 @@ typedef struct { // chosen settings
   VkExtent2D                    extent[1];
   VkSurfaceTransformFlagBitsKHR current_transform[1];
 } sc_cap_t;
+
+char const* read_file(char const* fn, size_t* n)
+{
+  size_t rem = 4096;
+  char* b = malloc(rem);
+  if (!b) abort();
+
+  int fd = open(fn, O_RDONLY);
+  if (fd < 0) abort();
+
+  size_t r = 0;
+  char* ptr = b;
+  while (1) {
+    errno = 0;
+    ssize_t cnt = read(fd, ptr, rem);
+    if (cnt == 0 || errno == 0) break;
+    if (cnt < 0) abort();
+    if (cnt == 0) abort();
+    ptr += cnt;
+    *n -= (size_t)cnt;
+    if (n == 0) abort();
+  }
+
+  close(fd);
+  return b;
+}
 
 static void init_app_info(VkApplicationInfo* info)
 {
@@ -95,14 +126,22 @@ int main()
 {
   // apparently glfw is nasty and has a bunch of global state
   // sdl seems to be better in this regard
-  glfwInit();
+  int code = glfwInit();
+  if (code != GLFW_TRUE) {
+    fprintf(stderr, "Failed to init glfw with %x\n", glfwGetError(NULL));
+    return 1;
+  }
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);   // apparently problematic?
   glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);     // try to cooperate xmonad
 
   GLFWwindow* win = glfwCreateWindow(800, 600, "Vulkan window", NULL, NULL);
-  if (!win) abort();
+  if (!win) {
+    int code = glfwGetError(NULL);
+    fprintf(stderr, "Failed to create glfw window with %x\n", code);
+    return 1;
+  }
 
   VkApplicationInfo app_info[1];
   init_app_info(app_info);
@@ -231,7 +270,6 @@ int main()
     sc_create_info->pQueueFamilyIndices   = 0;
   }
   else {
-    printf("concurrent mode\n");
     sc_create_info->imageSharingMode      = VK_SHARING_MODE_CONCURRENT;
     sc_create_info->queueFamilyIndexCount = 2;
     sc_create_info->pQueueFamilyIndices   = indices;
@@ -272,7 +310,30 @@ int main()
     if (VK_SUCCESS != vkCreateImageView(device, info, NULL, views + i)) abort();
   }
 
-  // oh no, better make some imageviews next, whatever those are
+  // last but not least, graphics pipeline, again, whatever that is
+  // apparently a fairly standard term in graphics? All I want to do is draw a
+  // triangle!!!
+  // is this somehow related to the way the hardware is designed?
+
+  // vertex shader: {incoming vertex} -> {clip_coordinate}
+  // - takes the incoming vertex and any specified properties
+  // - produces clip coordinates and anything that needs to go to fragment
+  //   shader
+  //
+  // vocab: clip coordinate = 4 tuple, last element divides the other two to
+  // convert to device coordinates (how is device coord 3d?)
+
+  size_t n = 0;
+  char const* vert = read_file("shaders/shader.vert.spv", &n);
+  VkShaderModuleCreateInfo shader_create_info[1];
+  memset(shader_create_info, 0, sizeof(shader_create_info));
+  shader_create_info->sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  shader_create_info->codeSize = n;
+  shader_create_info->pCode    = (uint32_t const*)vert;
+
+  VkShaderModule vert_shader;
+  if (VK_SUCCESS != vkCreateShaderModule(device, shader_create_info, NULL, &vert_shader)) abort();
+  free((void*)vert);
 
   while (!glfwWindowShouldClose(win)) {
    glfwPollEvents();
