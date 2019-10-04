@@ -34,19 +34,20 @@ char const* read_file(char const* fn, size_t* n)
   int fd = open(fn, O_RDONLY);
   if (fd < 0) abort();
 
+  *n = 0;
   size_t r = 0;
   char* ptr = b;
   while (1) {
     errno = 0;
     ssize_t cnt = read(fd, ptr, rem);
-    if (cnt == 0 || errno == 0) break;
+    if (cnt == 0 && errno == 0) break;
     if (cnt < 0) abort();
     if (cnt == 0) abort();
     ptr += cnt;
-    *n -= (size_t)cnt;
-    if (n == 0) abort();
+    *n += (size_t)cnt;
+    rem -= cnt;
+    if (rem == 0) abort();
   }
-
   close(fd);
   return b;
 }
@@ -335,8 +336,268 @@ int main()
   if (VK_SUCCESS != vkCreateShaderModule(device, shader_create_info, NULL, &vert_shader)) abort();
   free((void*)vert);
 
+  n = 0;
+  char const* frag = read_file("shaders/shader.frag.spv", &n);
+  memset(shader_create_info, 0, sizeof(shader_create_info));
+  shader_create_info->sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  shader_create_info->codeSize = n;
+  shader_create_info->pCode    = (uint32_t const*)frag;
+
+  VkShaderModule frag_shader;
+  if (VK_SUCCESS != vkCreateShaderModule(device, shader_create_info, NULL, &frag_shader)) abort();
+  free((void*)frag);
+
+  VkPipelineShaderStageCreateInfo pipe1[1];
+  memset(pipe1, 0, sizeof(pipe1));
+  pipe1->sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pipe1->stage  = VK_SHADER_STAGE_VERTEX_BIT;
+  pipe1->module = vert_shader;
+  pipe1->pName  = "main";
+
+  VkPipelineShaderStageCreateInfo pipe2[1];
+  memset(pipe2, 0, sizeof(pipe2));
+  pipe2->sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pipe2->stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+  pipe2->module = frag_shader;
+  pipe2->pName  = "main";
+
+  VkPipelineShaderStageCreateInfo stages[] = { *pipe1, *pipe2 };
+
+  VkPipelineVertexInputStateCreateInfo vii[1];
+  memset(vii, 0, sizeof(vii));
+  vii->sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  vii->vertexBindingDescriptionCount = 0;
+  vii->pVertexBindingDescriptions = NULL;
+  vii->vertexAttributeDescriptionCount = 0;
+  vii->pVertexAttributeDescriptions = NULL;
+
+  // end it now please
+  VkPipelineInputAssemblyStateCreateInfo pasci[1];
+  memset(pasci, 0, sizeof(pasci));
+  pasci->sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  pasci->topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  pasci->primitiveRestartEnable = VK_FALSE;
+
+  // WTF is a scissors
+  VkViewport viewport;
+  memset(&viewport, 0, sizeof(viewport));
+  viewport.x = 0.0f;
+  viewport.y = 0.0f;
+  viewport.width = (float)caps->extent->width;
+  viewport.height = (float)caps->extent->height;
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+
+  VkRect2D scissor;
+  memset(&scissor, 0, sizeof(scissor));
+  // offset 0, 0
+  scissor.extent = *(caps->extent);
+
+  VkPipelineViewportStateCreateInfo viewportState[1];
+  memset(viewportState, 0, sizeof(viewportState));
+  viewportState->sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  viewportState->viewportCount = 1;
+  viewportState->pViewports = &viewport;
+  viewportState->scissorCount = 1;
+  viewportState->pScissors = &scissor;
+
+  VkPipelineRasterizationStateCreateInfo rast[1];
+  memset(rast, 0, sizeof(rast));
+  rast->sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  rast->depthClampEnable = VK_FALSE;
+  rast->rasterizerDiscardEnable = VK_FALSE;
+  rast->polygonMode = VK_POLYGON_MODE_FILL;
+  rast->lineWidth = 1.0f;
+  rast->cullMode = VK_CULL_MODE_BACK_BIT;
+  rast->frontFace = VK_FRONT_FACE_CLOCKWISE;
+  rast->depthBiasEnable = VK_FALSE;
+  rast->depthBiasConstantFactor = 0.0f;
+  rast->depthBiasClamp = 0.0f;
+  rast->depthBiasSlopeFactor = 0.0f;
+
+  VkPipelineMultisampleStateCreateInfo msaa[1];
+  memset(msaa, 0, sizeof(msaa));
+  msaa->sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  msaa->sampleShadingEnable = VK_FALSE;
+  msaa->rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  msaa->minSampleShading = 1.0f;
+  msaa->pSampleMask = NULL;
+  msaa->alphaToCoverageEnable = VK_FALSE;
+  msaa->alphaToOneEnable = VK_FALSE;
+
+  VkPipelineColorBlendAttachmentState blend[1];
+  memset(blend, 0, sizeof(blend));
+  blend->colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  blend->blendEnable = VK_FALSE;
+  // bunch of optional fields
+  // some other thing I'm also ignoring
+
+  VkPipelineColorBlendStateCreateInfo cblend[1];
+  memset(cblend, 0, sizeof(cblend));
+  cblend->sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  cblend->logicOpEnable = VK_FALSE;
+  cblend->logicOp = VK_LOGIC_OP_COPY;
+  cblend->attachmentCount = 1;
+  cblend->pAttachments = blend;
+  // some optional stuff
+
+  VkDynamicState dynamic_states[] = {
+    VK_DYNAMIC_STATE_VIEWPORT,
+    VK_DYNAMIC_STATE_LINE_WIDTH,
+  };
+
+  VkPipelineDynamicStateCreateInfo dynamic_state[1];
+  memset(dynamic_state, 0, sizeof(dynamic_state));
+  dynamic_state->sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  dynamic_state->dynamicStateCount = 2;
+  dynamic_state->pDynamicStates = dynamic_states;
+
+  VkPipelineLayoutCreateInfo pipe_create[1];
+  memset(pipe_create, 0, sizeof(pipe_create));
+  pipe_create->sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipe_create->setLayoutCount = 0;
+  pipe_create->pSetLayouts = NULL;
+  pipe_create->pushConstantRangeCount = 0;
+  pipe_create->pPushConstantRanges = NULL;
+
+  VkPipelineLayout pipeline_layout;
+  if (VK_SUCCESS != vkCreatePipelineLayout(device, pipe_create, NULL, &pipeline_layout)) abort();
+
+  // oh god there's more
+  // we need to tell vulkan about the framebuffer attachmenets that will be used
+  // while rendering.
+  VkAttachmentDescription colorAttach;
+  memset(&colorAttach, 0, sizeof(colorAttach));
+  colorAttach.format = caps->surface_format->format;
+  colorAttach.samples = VK_SAMPLE_COUNT_1_BIT;
+  colorAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  colorAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  colorAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  colorAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  colorAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  colorAttach.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+  // how can there possibly be more
+
+  VkAttachmentReference caref[1];
+  memset(caref, 0, sizeof(caref));
+  caref->attachment = 0;
+  caref->layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkSubpassDescription subpass[1];
+  memset(subpass, 0, sizeof(subpass));
+  subpass->pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass->colorAttachmentCount = 1;
+  subpass->pColorAttachments = caref;
+
+  VkRenderPassCreateInfo rpci[1];
+  memset(rpci, 0, sizeof(rpci));
+  rpci->sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  rpci->attachmentCount = 1;
+  rpci->pAttachments = &colorAttach;
+  rpci->subpassCount = 1;
+  rpci->pSubpasses = subpass;
+
+  VkRenderPass renderPass;
+  if (VK_SUCCESS != vkCreateRenderPass(device, rpci, NULL, &renderPass)) abort();
+
+  VkGraphicsPipelineCreateInfo gpci[1];
+  memset(gpci, 0, sizeof(gpci));
+  gpci->sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  gpci->stageCount = 2;
+  gpci->pStages = stages;
+  gpci->pVertexInputState = vii;
+  gpci->pInputAssemblyState = pasci;
+  gpci->pViewportState = viewportState;
+  gpci->pRasterizationState = rast;
+  gpci->pMultisampleState = msaa;
+  gpci->pColorBlendState = cblend;
+  gpci->layout = pipeline_layout;
+  gpci->renderPass = renderPass;
+  gpci->subpass = 0;
+
+  VkPipeline graphicsPipeline;
+  if (VK_SUCCESS != vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, gpci, NULL, &graphicsPipeline)) abort();
+
+  // now we somehow need even more
+  VkFramebuffer* fbs = malloc(n_image * sizeof(*fbs));
+  if (!fbs) abort();
+  for (size_t i = 0; i < n_image; ++i) {
+    VkFramebufferCreateInfo c[1];
+    memset(c, 0, sizeof(c));
+    c->sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    c->renderPass = renderPass;
+    c->attachmentCount = 1;
+    c->pAttachments = views + i;
+    c->width = caps->extent->width;
+    c->height = caps->extent->height;
+    c->layers = 1;
+
+    if (VK_SUCCESS != vkCreateFramebuffer(device, c, NULL, fbs + i)) abort();
+  }
+
+  // here comes the good part, I guess?
+
+  VkCommandPoolCreateInfo pci[1];
+  memset(pci, 0, sizeof(pci));
+  pci->sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  pci->queueFamilyIndex = graphics_queue_idx;
+  pci->flags = 0;
+
+  VkCommandPool commandPool;
+  if (VK_SUCCESS != vkCreateCommandPool(device, pci, NULL, &commandPool)) abort();
+
+  VkCommandBuffer* commandBuffers = malloc(n_image * sizeof(*commandBuffers));
+  if (!commandBuffers) abort();
+
+  VkCommandBufferAllocateInfo cbai[1];
+  memset(cbai, 0, sizeof(cbai));
+  cbai->sType       = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cbai->commandPool = commandPool;
+  cbai->level       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  cbai->commandBufferCount = n_image;
+  if (VK_SUCCESS != vkAllocateCommandBuffers(device, cbai, commandBuffers)) abort();
+
+  for (size_t i = 0; i < n_image; ++i) {
+    VkCommandBufferBeginInfo b[1];
+    memset(b, 0, sizeof(b));
+    b->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    if (VK_SUCCESS != vkBeginCommandBuffer(commandBuffers[i], b)) abort();
+
+    VkRenderPassBeginInfo rb[1];
+    memset(rb, 0, sizeof(rb));
+    rb->sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rb->renderPass = renderPass;
+    rb->framebuffer = fbs[i];
+    rb->renderArea.extent = *(caps->extent);
+
+    VkClearValue clearColor;
+    clearColor.color.float32[3] = 1.0f;
+    rb->clearValueCount = 1;
+    rb->pClearValues = &clearColor;
+    vkCmdBeginRenderPass(commandBuffers[i], rb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+    vkCmdEndRenderPass(commandBuffers[i]);
+    vkEndCommandBuffer(commandBuffers[i]);
+    memset(&clearColor, 0, sizeof(clearColor));
+  }
+
   while (!glfwWindowShouldClose(win)) {
-   glfwPollEvents();
+    uint32_t idx;
+    vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, VK_NULL_HANDLE, VK_NULL_HANDLE, &idx);
+
+    VkSubmitInfo si[1];
+    memset(si, 0, sizeof(si));
+    si->commandBufferCount = 1;
+    si->pCommandBuffers = commandBuffers + idx;
+
+    vkQueueSubmit(graphics_queue, 1, si, VK_NULL_HANDLE);
+
+    VkPresentInfoKHR pi[1];
+
+    glfwPollEvents();
+    usleep(1000);
   }
 
   // alright so this really sucks
