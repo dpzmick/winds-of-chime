@@ -11,7 +11,7 @@ fn main() {
 
     let out_dir = env::var("OUT_DIR").unwrap();
     for shader in shaders {
-        let out = path::Path::new(&out_dir).join(shader);
+        let out = path::Path::new(&out_dir).join(shader).with_extension("spirv");
 
         let build = match fs::metadata(out.clone()) {
             Ok(out_md) => {
