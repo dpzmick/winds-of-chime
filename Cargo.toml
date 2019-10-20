@@ -7,7 +7,7 @@ build = "build.rs"
 
 [dependencies]
 ash   = "0.29.0"
-winit = "0.19.3"
+winit = "0.20.0-alpha4"
 
 [profile.dev]
 opt-level     = 0

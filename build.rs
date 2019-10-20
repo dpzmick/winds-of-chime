@@ -4,13 +4,31 @@ use std::path;
 use std::io;
 use std::process::Command;
 
+#[derive(Copy, Clone)]
+enum ShaderStage {
+    Compute,
+    Vertex,
+    Fragment,
+}
+
+fn stage_str(s: ShaderStage) -> &'static str {
+    match s {
+        ShaderStage::Compute  => "compute",
+        ShaderStage::Vertex   => "vertex",
+        ShaderStage::Fragment => "fragment"
+    }
+}
+
 fn main() {
+    let root = path::Path::new("src").join("shaders");
     let shaders = &[
-        path::Path::new("src").join("shaders").join("memcpy.glsl"),
+        (root.join("memcpy.glsl"), ShaderStage::Compute),
+        (root.join("vert.glsl"),   ShaderStage::Vertex),
+        (root.join("frag.glsl"),   ShaderStage::Fragment),
     ];
 
     let out_dir = env::var("OUT_DIR").unwrap();
-    for shader in shaders {
+    for (shader, stage) in shaders {
         let out = path::Path::new(&out_dir).join(shader).with_extension("spirv");
 
         let build = match fs::metadata(out.clone()) {
@@ -38,7 +56,7 @@ fn main() {
         println!("Compiling shader {:?} to {:?}", shader, out);
         let mut cmd = Command::new("glslc");
         cmd
-            .arg("-fshader-stage=compute")
+            .arg(format!("-fshader-stage={}", stage_str(*stage)))
             .arg(shader.to_str().expect("Input path not valid UTF-8"))
             .arg("-o")
             .arg(out.to_str().expect("Output path not valid UTF-8"))
