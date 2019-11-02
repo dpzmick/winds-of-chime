@@ -8,6 +8,7 @@ build = "build.rs"
 [dependencies]
 ash   = "0.29.0"
 winit = "0.20.0-alpha4"
+glm   = "0.2.3"
 
 [profile.dev]
 opt-level     = 0

@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate ash;
 extern crate winit;
+extern crate glm;
 
 #[macro_use]
 mod macros;
@@ -10,6 +11,50 @@ use std::os::raw::*;
 
 // traits
 use ash::version::{EntryV1_0, InstanceV1_0, DeviceV1_0};
+
+// this layout seems wrong
+#[derive(Clone)]
+struct Vertex {
+    pos:   glm::Vector2<f32>,
+    color: glm::Vector3<f32>,
+}
+
+impl Vertex {
+    fn new(pos: [f32; 2], color: [f32; 3]) -> Self {
+        Vertex {
+            pos:   glm::Vector2::new(pos[0], pos[1]),
+            color: glm::Vector3::new(color[0], color[1], color[2]),
+        }
+    }
+
+    fn make_bindings_desc() -> ash::vk::VertexInputBindingDescription {
+        ash::vk::VertexInputBindingDescription::builder()
+            .binding(0)
+            .stride(std::mem::size_of::<Vertex>() as u32)
+            .input_rate(ash::vk::VertexInputRate::VERTEX)
+            .build()
+    }
+
+    fn make_attr_desc() -> [ash::vk::VertexInputAttributeDescription; 2] {
+        let inst = Vertex { // FIXME hacking around lack of offsetof
+            pos: glm::Vector2::new(1., 1.),
+            color: glm::Vector3::new(1., 1., 1.),
+        };
+
+        [ash::vk::VertexInputAttributeDescription::builder()
+         .binding(0)
+         .location(0)
+         .format(ash::vk::Format::R32G32_SFLOAT)
+         .offset(((&inst.pos as *const _ as usize) - (&inst as *const _ as usize)) as u32)
+         .build(),
+         ash::vk::VertexInputAttributeDescription::builder()
+         .binding(0)
+         .location(1)
+         .format(ash::vk::Format::R32G32B32_SFLOAT)
+         .offset(((&inst.color as *const _ as usize) - (&inst as *const _ as usize)) as u32)
+         .build()]
+    }
+}
 
 fn get_vert_code() -> &'static [u32]
 {
@@ -50,6 +95,12 @@ fn main() {
         width: 800,
         height: 800,
     };
+
+    let vertex_data = [
+        Vertex::new([ 0.0, -0.5], [1.0, 0.0, 0.0]),
+        Vertex::new([ 0.5,  0.5], [0.0, 1.0, 0.0]),
+        Vertex::new([-0.5,  0.5], [0.0, 0.0, 1.0]),
+    ];
 
     let event_loop = winit::event_loop::EventLoop::new();
     let window = winit::window::WindowBuilder::new()
@@ -138,6 +189,7 @@ fn main() {
     let mut device_name      = None;
     let mut device_features  = None;
     let mut queue_family_idx = None;
+    let mut mem_type_idx     = None;
 
     let physical_devices = unsafe { instance.enumerate_physical_devices().expect("No devices found") };
     println!("{} Devices:", physical_devices.len());
@@ -147,7 +199,8 @@ fn main() {
         let feats = unsafe { instance.get_physical_device_features(*dev) };
         println!("  Name: {:?} Type: {:?}", name, props.device_type);
 
-        let mut qidx = None;
+        let mut qidx   = None;
+        let mut memidx = None;
 
         let queue_props = unsafe { instance.get_physical_device_queue_family_properties(*dev) };
         println!("    {} queue families:", queue_props.len());
@@ -165,11 +218,25 @@ fn main() {
             }
         }
 
-        if device.is_none() && !qidx.is_none() {
+        let mem_props = unsafe { instance.get_physical_device_memory_properties(*dev) };
+        println!("    {} memory families:", mem_props.memory_type_count);
+        for idx in 0..mem_props.memory_type_count {
+            let mem = mem_props.memory_types[idx as usize];
+            println!("        {:?}", mem);
+
+            use ash::vk::MemoryPropertyFlags;
+            let want = MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT;
+            if mem.property_flags.intersects(want) {
+                memidx = Some(idx);
+            }
+        }
+
+        if device.is_none() && !qidx.is_none() && !memidx.is_none() {
             device           = Some(*dev);
             device_name      = Some(name.to_str().expect("Bad device name"));
             device_features  = Some(feats); // copy
             queue_family_idx = qidx;
+            mem_type_idx     = memidx;
         }
     }
 
@@ -235,6 +302,36 @@ fn main() {
     };
 
     let queue = unsafe { dev.get_device_queue(queue_family_idx.unwrap(), 0) };
+
+    let vertex_buffer = {
+        let create_info = ash::vk::BufferCreateInfo::builder()
+            .size((std::mem::size_of::<Vertex>() as u64) * (vertex_data.len() as u64))
+            .usage(ash::vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(ash::vk::SharingMode::EXCLUSIVE);
+
+        unsafe { dev.create_buffer(&create_info, None) }
+    }.expect("Failed to create buffer");
+
+    let mem_reqs = unsafe { dev.get_buffer_memory_requirements(vertex_buffer) };
+
+    let vertex_memory = {
+        let alloc_info = ash::vk::MemoryAllocateInfo::builder()
+            .allocation_size(mem_reqs.size)
+            .memory_type_index(mem_type_idx.unwrap());
+
+        unsafe { dev.allocate_memory(&alloc_info, None) }
+    }.expect("Failed to allocate vertex memory");
+
+    unsafe { dev.bind_buffer_memory(vertex_buffer, vertex_memory, 0) }.expect("Failed to bind");
+
+    unsafe {
+        let ptr = dev.map_memory(vertex_memory, 0, mem_reqs.size, ash::vk::MemoryMapFlags::empty()).expect("Failed to map memory");
+        let slice = std::slice::from_raw_parts_mut(ptr as *mut Vertex,
+                                                   (mem_reqs.size as usize) / std::mem::size_of::<Vertex>());
+        for (i, x) in slice.iter_mut().enumerate() {
+            *x = vertex_data[i].clone();
+        }
+    };
 
     let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &dev);
     let swapchain = {
@@ -365,11 +462,14 @@ fn main() {
                 .build(),
         ];
 
+        let bindings = [Vertex::make_bindings_desc()];
+        let attrs    = Vertex::make_attr_desc();
+
         // describes where to get vertexices from (and what the
         // bindings should be)
         let input_state = ash::vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(&[])    // hardcoded in shader
-            .vertex_attribute_descriptions(&[]); // hardcoded in shader
+            .vertex_binding_descriptions(&bindings)
+            .vertex_attribute_descriptions(&attrs);
 
         // what kind of geometry to graw from the verticies
         // if primitive restart should be enabled (whatever that means)
@@ -515,9 +615,21 @@ fn main() {
         };
 
         unsafe {
+            dev.cmd_bind_vertex_buffers(
+                command_buffers[i],
+                0,
+                &[vertex_buffer],
+                &[0]
+            )
+        };
+
+        unsafe {
             dev.cmd_draw(
                 command_buffers[i],
-                3, 1, 0, 0,
+                /* vertex count */   vertex_data.len() as u32,
+                /* instance count */ 1,
+                /* first vertex */   0,
+                /* first instance */ 0,
             )
         };
 
