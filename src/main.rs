@@ -134,8 +134,8 @@ fn main() {
         let ext_names = &[
             ash::extensions::ext::DebugReport::name().as_ptr(),
             ash::extensions::khr::Surface::name().as_ptr(),
-            ash::extensions::khr::WaylandSurface::name().as_ptr(),
-            // ash::extensions::khr::XlibSurface::name().as_ptr(),
+            // ash::extensions::khr::WaylandSurface::name().as_ptr(),
+            ash::extensions::khr::XlibSurface::name().as_ptr(),
         ];
 
         let create_info = ash::vk::InstanceCreateInfo::builder()
@@ -162,28 +162,28 @@ fn main() {
     };
 
     let surface_loader = ash::extensions::khr::Surface::new(&lib, &instance);
-    let surface = {
-        use winit::platform::unix::WindowExtUnix;
-        let disp = window.wayland_display().expect("Couldn't get wayland display");
-        let surf = window.wayland_surface().expect("Couldn't get wayland surface");
-        let create_info = ash::vk::WaylandSurfaceCreateInfoKHR::builder()
-            .surface(surf)
-            .display(disp);
-
-        let ext = ash::extensions::khr::WaylandSurface::new(&lib, &instance);
-        unsafe { ext.create_wayland_surface(&create_info, None) }.expect("Failed to create surface")
-    };
     // let surface = {
     //     use winit::platform::unix::WindowExtUnix;
-    //     let disp = window.xlib_display().expect("Couldn't get xlib display");
-    //     let win  = window.xlib_window().expect("Couldn't get xlib window");
-    //     let create_info = ash::vk::XlibSurfaceCreateInfoKHR::builder()
-    //         .window(win)
-    //         .dpy(disp as *mut ash::vk::Display);
+    //     let disp = window.wayland_display().expect("Couldn't get wayland display");
+    //     let surf = window.wayland_surface().expect("Couldn't get wayland surface");
+    //     let create_info = ash::vk::WaylandSurfaceCreateInfoKHR::builder()
+    //         .surface(surf)
+    //         .display(disp);
 
-    //     let ext = ash::extensions::khr::XlibSurface::new(&lib, &instance);
-    //     unsafe { ext.create_xlib_surface(&create_info, None) }.expect("Failed to create surface")
+    //     let ext = ash::extensions::khr::WaylandSurface::new(&lib, &instance);
+    //     unsafe { ext.create_wayland_surface(&create_info, None) }.expect("Failed to create surface")
     // };
+    let surface = {
+        use winit::platform::unix::WindowExtUnix;
+        let disp = window.xlib_display().expect("Couldn't get xlib display");
+        let win  = window.xlib_window().expect("Couldn't get xlib window");
+        let create_info = ash::vk::XlibSurfaceCreateInfoKHR::builder()
+            .window(win)
+            .dpy(disp as *mut ash::vk::Display);
+
+        let ext = ash::extensions::khr::XlibSurface::new(&lib, &instance);
+        unsafe { ext.create_xlib_surface(&create_info, None) }.expect("Failed to create surface")
+    };
 
     let mut device           = None; // copy of handle
     let mut device_name      = None;
@@ -325,11 +325,13 @@ fn main() {
     unsafe { dev.bind_buffer_memory(vertex_buffer, vertex_memory, 0) }.expect("Failed to bind");
 
     unsafe {
+        // because there is a minumum allocation size on the card, we might have mapped more memory than we really wanted
+        println!("mapped {} sizeof {}", mem_reqs.size, std::mem::size_of::<Vertex>());
         let ptr = dev.map_memory(vertex_memory, 0, mem_reqs.size, ash::vk::MemoryMapFlags::empty()).expect("Failed to map memory");
         let slice = std::slice::from_raw_parts_mut(ptr as *mut Vertex,
                                                    (mem_reqs.size as usize) / std::mem::size_of::<Vertex>());
-        for (i, x) in slice.iter_mut().enumerate() {
-            *x = vertex_data[i].clone();
+        for (i, v) in vertex_data.iter().enumerate() {
+            slice[i] = v.clone();
         }
     };
 
