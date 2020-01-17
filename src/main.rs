@@ -344,11 +344,13 @@ fn main() {
     unsafe { dev.bind_buffer_memory(vertex_buffer, vertex_memory, 0) }.expect("Failed to bind");
 
     unsafe {
+        // because there is a minumum allocation size on the card, we might have mapped more memory than we really wanted
+        println!("mapped {} sizeof {}", mem_reqs.size, std::mem::size_of::<Vertex>());
         let ptr = dev.map_memory(vertex_memory, 0, mem_reqs.size, ash::vk::MemoryMapFlags::empty()).expect("Failed to map memory");
         let slice = std::slice::from_raw_parts_mut(ptr as *mut Vertex,
                                                    (mem_reqs.size as usize) / std::mem::size_of::<Vertex>());
-        for (i, x) in slice.iter_mut().enumerate() {
-            *x = vertex_data[i].clone();
+        for (i, v) in vertex_data.iter().enumerate() {
+            slice[i] = v.clone();
         }
     };
 
