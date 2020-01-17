@@ -12,7 +12,7 @@ use std::os::raw::*;
 // traits
 use ash::version::{EntryV1_0, InstanceV1_0, DeviceV1_0};
 
-// this layout seems wrong
+// I don't think layout matters, since we bnd explicit regions to the card
 #[derive(Clone)]
 struct Vertex {
     pos:   glm::Vector2<f32>,
@@ -96,11 +96,15 @@ fn main() {
         height: 800,
     };
 
+    // square
     let vertex_data = [
-        Vertex::new([ 0.0, -0.5], [1.0, 0.0, 0.0]),
-        Vertex::new([ 0.5,  0.5], [0.0, 1.0, 0.0]),
-        Vertex::new([-0.5,  0.5], [0.0, 0.0, 1.0]),
+        Vertex::new([-0.5, -0.5], [1.0, 0.0, 0.0]),
+        Vertex::new([ 0.5, -0.5], [0.0, 1.0, 0.0]),
+        Vertex::new([ 0.5,  0.5], [0.0, 0.0, 1.0]),
+        Vertex::new([-0.5,  0.5], [1.0, 1.0, 1.0]),
     ];
+
+    let indicies: &[u16] = &[0, 1, 2, 2, 3, 0];
 
     let event_loop = winit::event_loop::EventLoop::new();
     let window = winit::window::WindowBuilder::new()
@@ -134,8 +138,8 @@ fn main() {
         let ext_names = &[
             ash::extensions::ext::DebugReport::name().as_ptr(),
             ash::extensions::khr::Surface::name().as_ptr(),
-            ash::extensions::khr::WaylandSurface::name().as_ptr(),
-            // ash::extensions::khr::XlibSurface::name().as_ptr(),
+            // ash::extensions::khr::WaylandSurface::name().as_ptr(),
+            ash::extensions::khr::XlibSurface::name().as_ptr(),
         ];
 
         let create_info = ash::vk::InstanceCreateInfo::builder()
@@ -162,28 +166,28 @@ fn main() {
     };
 
     let surface_loader = ash::extensions::khr::Surface::new(&lib, &instance);
-    let surface = {
-        use winit::platform::unix::WindowExtUnix;
-        let disp = window.wayland_display().expect("Couldn't get wayland display");
-        let surf = window.wayland_surface().expect("Couldn't get wayland surface");
-        let create_info = ash::vk::WaylandSurfaceCreateInfoKHR::builder()
-            .surface(surf)
-            .display(disp);
-
-        let ext = ash::extensions::khr::WaylandSurface::new(&lib, &instance);
-        unsafe { ext.create_wayland_surface(&create_info, None) }.expect("Failed to create surface")
-    };
     // let surface = {
     //     use winit::platform::unix::WindowExtUnix;
-    //     let disp = window.xlib_display().expect("Couldn't get xlib display");
-    //     let win  = window.xlib_window().expect("Couldn't get xlib window");
-    //     let create_info = ash::vk::XlibSurfaceCreateInfoKHR::builder()
-    //         .window(win)
-    //         .dpy(disp as *mut ash::vk::Display);
+    //     let disp = window.wayland_display().expect("Couldn't get wayland display");
+    //     let surf = window.wayland_surface().expect("Couldn't get wayland surface");
+    //     let create_info = ash::vk::WaylandSurfaceCreateInfoKHR::builder()
+    //         .surface(surf)
+    //         .display(disp);
 
-    //     let ext = ash::extensions::khr::XlibSurface::new(&lib, &instance);
-    //     unsafe { ext.create_xlib_surface(&create_info, None) }.expect("Failed to create surface")
+    //     let ext = ash::extensions::khr::WaylandSurface::new(&lib, &instance);
+    //     unsafe { ext.create_wayland_surface(&create_info, None) }.expect("Failed to create surface")
     // };
+    let surface = {
+        use winit::platform::unix::WindowExtUnix;
+        let disp = window.xlib_display().expect("Couldn't get xlib display");
+        let win  = window.xlib_window().expect("Couldn't get xlib window");
+        let create_info = ash::vk::XlibSurfaceCreateInfoKHR::builder()
+            .window(win)
+            .dpy(disp as *mut ash::vk::Display);
+
+        let ext = ash::extensions::khr::XlibSurface::new(&lib, &instance);
+        unsafe { ext.create_xlib_surface(&create_info, None) }.expect("Failed to create surface")
+    };
 
     let mut device           = None; // copy of handle
     let mut device_name      = None;
@@ -213,7 +217,22 @@ fn main() {
             println!("      n_queue: {:?}", q.queue_count);
             println!("      present: {:?}", present);
 
-            if q.queue_flags.intersects(ash::vk::QueueFlags::GRAPHICS) && present {
+            // can't quite do exactly what the tutorial specifies on
+            // my intel graphics. I'm getting:
+            // 1 Devices:
+            // Name: "Intel(R) UHD Graphics 620 (Kabylake GT2)" Type: INTEGRATED_GPU
+            //   1 queue families:
+            //   flags: GRAPHICS | COMPUTE | TRANSFER
+            //     n_queue: 1
+            //     present: true
+            //   2 memory families:
+            //       MemoryType { property_flags: DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 0 }
+            //       MemoryType { property_flags: DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 1 }
+            // so instead, going to try and use mutex and signaling to do the transfer
+            // I'm going to skip this part of the tutorial for now..
+
+            let want = ash::vk::QueueFlags::GRAPHICS | ash::vk::QueueFlags::TRANSFER;
+            if q.queue_flags.intersects(want) && present {
                 qidx = Some(idx as u32);
             }
         }
@@ -330,6 +349,35 @@ fn main() {
                                                    (mem_reqs.size as usize) / std::mem::size_of::<Vertex>());
         for (i, x) in slice.iter_mut().enumerate() {
             *x = vertex_data[i].clone();
+        }
+    };
+
+    let index_buffer = {
+        let create_info = ash::vk::BufferCreateInfo::builder()
+            .size((std::mem::size_of::<u16>() as u64) * (indicies.len() as u64))
+            .usage(ash::vk::BufferUsageFlags::INDEX_BUFFER)
+            .sharing_mode(ash::vk::SharingMode::EXCLUSIVE);
+
+        unsafe { dev.create_buffer(&create_info, None) }
+    }.expect("Failed to create index buffer");
+
+    let index_memory = {
+        let alloc_info = ash::vk::MemoryAllocateInfo::builder()
+            .allocation_size(mem_reqs.size)
+            .memory_type_index(mem_type_idx.unwrap());
+
+        unsafe { dev.allocate_memory(&alloc_info, None) }
+    }.expect("Failed to allocate index memory");
+
+    unsafe { dev.bind_buffer_memory(index_buffer, index_memory, 0) }.expect("Failed to bind");
+
+    unsafe {
+        let ptr = dev.map_memory(index_memory, 0, mem_reqs.size, ash::vk::MemoryMapFlags::empty()).expect("Failed to map memory");
+        let slice = std::slice::from_raw_parts_mut(ptr as *mut u16,
+                                                   (mem_reqs.size as usize) / std::mem::size_of::<u16>());
+
+        for (i, x) in indicies.iter().enumerate() {
+            slice[i] = x.clone();
         }
     };
 
@@ -624,11 +672,21 @@ fn main() {
         };
 
         unsafe {
-            dev.cmd_draw(
+            dev.cmd_bind_index_buffer(
                 command_buffers[i],
-                /* vertex count */   vertex_data.len() as u32,
+                index_buffer,
+                0,
+                ash::vk::IndexType::UINT16
+            )
+        };
+
+        unsafe {
+            dev.cmd_draw_indexed(
+                command_buffers[i],
+                /* index count */   indicies.len() as u32,
                 /* instance count */ 1,
                 /* first vertex */   0,
+                /* vertex offset */  0,
                 /* first instance */ 0,
             )
         };
