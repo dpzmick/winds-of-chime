@@ -12,6 +12,41 @@ use std::os::raw::*;
 // traits
 use ash::version::{EntryV1_0, InstanceV1_0, DeviceV1_0};
 
+// 1 Devices:
+// Name: "Intel(R) UHD Graphics 620 (Kabylake GT2)" Type: INTEGRATED_GPU
+//   1 queue families:
+//   flags: GRAPHICS | COMPUTE | TRANSFER
+//     n_queue: 1
+//     present: true
+//   2 memory families:
+//       MemoryType { property_flags: DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 0 }
+//       MemoryType { property_flags: DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 1 }
+
+// 1 Devices:
+//  Name: "GeForce GTX 1050 Ti" Type: DISCRETE_GPU
+//    3 queue families:
+//    flags: GRAPHICS | COMPUTE | TRANSFER | SPARSE_BINDING
+//      n_queue: 16
+//      present: true
+//    flags: TRANSFER | SPARSE_BINDING
+//      n_queue: 2
+//      present: false
+//    flags: COMPUTE | TRANSFER | SPARSE_BINDING
+//      n_queue: 8
+//      present: true
+//    11 memory families:
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: , heap_index: 1 }
+//        MemoryType { property_flags: DEVICE_LOCAL, heap_index: 0 }
+//        MemoryType { property_flags: DEVICE_LOCAL, heap_index: 0 }
+//        MemoryType { property_flags: HOST_VISIBLE | HOST_COHERENT, heap_index: 1 }
+//        MemoryType { property_flags: HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 1 }
+
 // I don't think layout matters, since we bnd explicit regions to the card
 #[derive(Clone)]
 struct Vertex {
@@ -88,10 +123,6 @@ unsafe extern "system" fn vulkan_debug_callback(
 
 fn main() {
     let surface_resolution = ash::vk::Extent2D {
-        // width: window.get_inner_size().unwrap().width as u32,
-        // height: window.get_inner_size().unwrap().height as u32,
-        // width: 2304,
-        // height: 1728,
         width: 800,
         height: 800,
     };
@@ -108,7 +139,7 @@ fn main() {
 
     let event_loop = winit::event_loop::EventLoop::new();
     let window = winit::window::WindowBuilder::new()
-        .with_title("Triangle")
+        .with_title("winds of chime")
         .with_inner_size(winit::dpi::LogicalSize::new(
             surface_resolution.width as f64,
             surface_resolution.height as f64))
@@ -138,7 +169,6 @@ fn main() {
         let ext_names = &[
             ash::extensions::ext::DebugReport::name().as_ptr(),
             ash::extensions::khr::Surface::name().as_ptr(),
-            // ash::extensions::khr::WaylandSurface::name().as_ptr(),
             ash::extensions::khr::XlibSurface::name().as_ptr(),
         ];
 
@@ -152,9 +182,11 @@ fn main() {
 
     let debug_info = ash::vk::DebugReportCallbackCreateInfoEXT::builder()
         .flags(
-            ash::vk::DebugReportFlagsEXT::ERROR
+            ash::vk::DebugReportFlagsEXT::INFORMATION
             | ash::vk::DebugReportFlagsEXT::WARNING
-            | ash::vk::DebugReportFlagsEXT::PERFORMANCE_WARNING,
+            | ash::vk::DebugReportFlagsEXT::PERFORMANCE_WARNING
+            | ash::vk::DebugReportFlagsEXT::ERROR
+            | ash::vk::DebugReportFlagsEXT::DEBUG
         )
         .pfn_callback(Some(vulkan_debug_callback));
 
@@ -166,17 +198,6 @@ fn main() {
     };
 
     let surface_loader = ash::extensions::khr::Surface::new(&lib, &instance);
-    // let surface = {
-    //     use winit::platform::unix::WindowExtUnix;
-    //     let disp = window.wayland_display().expect("Couldn't get wayland display");
-    //     let surf = window.wayland_surface().expect("Couldn't get wayland surface");
-    //     let create_info = ash::vk::WaylandSurfaceCreateInfoKHR::builder()
-    //         .surface(surf)
-    //         .display(disp);
-
-    //     let ext = ash::extensions::khr::WaylandSurface::new(&lib, &instance);
-    //     unsafe { ext.create_wayland_surface(&create_info, None) }.expect("Failed to create surface")
-    // };
     let surface = {
         use winit::platform::unix::WindowExtUnix;
         let disp = window.xlib_display().expect("Couldn't get xlib display");
@@ -217,22 +238,8 @@ fn main() {
             println!("      n_queue: {:?}", q.queue_count);
             println!("      present: {:?}", present);
 
-            // can't quite do exactly what the tutorial specifies on
-            // my intel graphics. I'm getting:
-            // 1 Devices:
-            // Name: "Intel(R) UHD Graphics 620 (Kabylake GT2)" Type: INTEGRATED_GPU
-            //   1 queue families:
-            //   flags: GRAPHICS | COMPUTE | TRANSFER
-            //     n_queue: 1
-            //     present: true
-            //   2 memory families:
-            //       MemoryType { property_flags: DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 0 }
-            //       MemoryType { property_flags: DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, heap_index: 1 }
-            // so instead, going to try and use mutex and signaling to do the transfer
-            // I'm going to skip this part of the tutorial for now..
-
             let want = ash::vk::QueueFlags::GRAPHICS | ash::vk::QueueFlags::TRANSFER;
-            if q.queue_flags.intersects(want) && present {
+            if q.queue_flags.contains(want) && present {
                 qidx = Some(idx as u32);
             }
         }
@@ -275,6 +282,11 @@ fn main() {
     let surface_caps = unsafe {
         surface_loader.get_physical_device_surface_capabilities(device.unwrap(), surface)
     }.expect("Failed to get surface capabilites");
+
+    println!("caps min {:?}", surface_caps.min_image_extent);
+    println!("caps max {:?}", surface_caps.max_image_extent);
+    println!("request: {:?}", surface_resolution);
+    panic!("escape!");
 
     let image_cnt = if surface_caps.max_image_count > 0 {
         std::cmp::max(surface_caps.min_image_count+1, surface_caps.max_image_count)
@@ -401,6 +413,10 @@ fn main() {
                 )
             ),
         };
+        println!("caps min {:?}", surface_caps.min_image_extent);
+        println!("caps max {:?}", surface_caps.max_image_extent);
+        println!("request: {:?}", surface_resolution);
+        println!("using extent {:?}", actual_extent);
         let create_info = ash::vk::SwapchainCreateInfoKHR::builder()
             .surface(surface)
             .min_image_count(image_cnt)
@@ -416,6 +432,8 @@ fn main() {
 
         unsafe { swapchain_loader.create_swapchain(&create_info, None) }
     }.expect("Failed to create swapchain");
+
+    panic!("escape!");
 
     let present_views: Vec<ash::vk::ImageView> =
         unsafe { swapchain_loader.get_swapchain_images(swapchain) }
