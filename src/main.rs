@@ -91,6 +91,12 @@ impl Vertex {
     }
 }
 
+struct UBO {
+    model: glm::Matrix4<f32>,
+    view: glm::Matrix4<f32>,
+    proj: glm::Matrix4<f32>,
+}
+
 fn get_vert_code() -> &'static [u32]
 {
     const CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/src/shaders/vert.spirv"));
@@ -152,6 +158,18 @@ fn main() {
         .with_resizable(false)
         .build(&event_loop)
         .expect("Failed to create window");
+
+    // for some reason, winit refues to not scale the window
+    // even though my dpi is actually set correctly!
+    // so, we'll create the window, then get the size of it again
+    // afterwards for actual use
+    println!("scale factor: {}", window.scale_factor());
+    println!("inner size: {:?}", window.inner_size());
+
+    let surface_resolution = ash::vk::Extent2D {
+        width: window.inner_size().width,
+        height: window.inner_size().height,
+    };
 
     let lib = ash::Entry::new().unwrap(); // lib loader
     let instance = {
@@ -283,11 +301,6 @@ fn main() {
         surface_loader.get_physical_device_surface_capabilities(device.unwrap(), surface)
     }.expect("Failed to get surface capabilites");
 
-    println!("caps min {:?}", surface_caps.min_image_extent);
-    println!("caps max {:?}", surface_caps.max_image_extent);
-    println!("request: {:?}", surface_resolution);
-    panic!("escape!");
-
     let image_cnt = if surface_caps.max_image_count > 0 {
         std::cmp::max(surface_caps.min_image_count+1, surface_caps.max_image_count)
     }
@@ -413,10 +426,7 @@ fn main() {
                 )
             ),
         };
-        println!("caps min {:?}", surface_caps.min_image_extent);
-        println!("caps max {:?}", surface_caps.max_image_extent);
-        println!("request: {:?}", surface_resolution);
-        println!("using extent {:?}", actual_extent);
+
         let create_info = ash::vk::SwapchainCreateInfoKHR::builder()
             .surface(surface)
             .min_image_count(image_cnt)
@@ -432,8 +442,6 @@ fn main() {
 
         unsafe { swapchain_loader.create_swapchain(&create_info, None) }
     }.expect("Failed to create swapchain");
-
-    panic!("escape!");
 
     let present_views: Vec<ash::vk::ImageView> =
         unsafe { swapchain_loader.get_swapchain_images(swapchain) }
