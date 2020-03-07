@@ -6,9 +6,9 @@ edition = "2018"
 build = "build.rs"
 
 [dependencies]
-ash   = "0.29.0"
 winit = "0.21.0"
-glm   = "0.2.3"
+vk-sys = "0.5.1"
+vk_functions = {path = "./vk_functions"}
 
 [profile.dev]
 opt-level     = 0

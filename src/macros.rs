@@ -1,13 +1,16 @@
+#[macro_export]
 macro_rules! bytes_nul_terminate {
     ($s:expr) => ( concat!($s, "\0").as_bytes() );
 }
 
-// macro_rules! cstr_lit {
-//     ($s:expr) => ( concat!($s, "\0").as_bytes() as *const std::os::raw::c_char; );
-// }
+#[macro_export]
+macro_rules! static_cstr {
+    ($s:expr) => ( bytes_nul_terminate!($s).as_ptr() as *const std::os::raw::c_char );
+}
 
-macro_rules! ffi_cstr { // wow this sucks
+#[macro_export]
+macro_rules! static_ffi_cstr {
     ($s:expr) => (
-        std::ffi::CStr::from_bytes_with_nul(bytes_nul_terminate!($s)).expect("Failed to format ffi cstr")
+        unsafe { std::ffi::CStr::from_ptr(static_cstr!($s)) }
     );
 }
