@@ -1,66 +1,63 @@
 extern crate winit;
 extern crate vk_functions;
+extern crate bitflags;
 
+mod test;
 mod dynamic_library;
 mod macros;
-mod sys;
+//mod sys;
+//mod vk;
 
 use dynamic_library::DynamicLibrary;
-use std::marker::PhantomData;
-use std::ptr::{null, null_mut};
-use std::os::raw::*;
-
-struct Instance<'a> {
-    vk:      *mut sys::VkInstance,
-    ptrs:    sys::VkInstancePointers,
-    phantom: PhantomData<&'a DynamicLibrary>,
-}
-
-impl<'a> Instance<'a> {
-    fn new(lib: &'a DynamicLibrary) -> Self {
-        unsafe {
-            // use the minimal loader to boostrap and create an instance
-            let ptrs = sys::VkInstanceBootstrap::load(|nm| { lib.sym(nm).unwrap() } );
-
-            let create_info = sys::VkInstanceCreateInfo {
-                stype: sys::VkStructureType( sys::VkStructureType::VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO ),
-                next:  null(),
-                flags: 0,
-                application_info: null(),
-                enabled_layer_count: 0,
-                enabled_layer_names: null(),
-                enabled_extension_count: 0,
-                enabled_extension_names: null(),
-            };
-
-            let instance = {
-                let mut instance: *mut sys::VkInstance = null_mut();
-
-                let result = (ptrs.vkCreateInstance)(&create_info, null(), &mut instance);
-                if result.0 != 0 { panic!("failed to create"); }
-                instance
-            };
-
-            Self {
-                vk: instance,
-                ptrs: sys::VkInstancePointers::load_with_arg(|nm| lib.sym(nm).unwrap(), instance as *mut c_void),
-                phantom: PhantomData
-            }
-        }
-
-        // then load the full set of function pointers
-    }
-}
-
-impl<'a> Drop for Instance<'a> {
-    fn drop(&mut self) {
-        unsafe {
-            (self.ptrs.vkDestroyInstance)(self.vk, null());
-        }
-    }
-}
 
 fn main() {
-    let lib = DynamicLibrary::open(static_ffi_cstr!("/usr/lib/libvulkan.so")).expect("lib");
-    let _instance = Instance::new(&lib);
+    println!("{:?}", test::ShaderStage::ALL_GRAPHICS);
+    // let lib = DynamicLibrary::open(static_ffi_cstr!("/usr/lib/libvulkan.so")).expect("lib");
+
+    // let instance = {
+    //     let app_info = vk::ApplicationInfoBuilder::new()
+    //         .application_name(static_ffi_cstr!("Windows of chime"))
+    //         .build();
+
+    //     let layers = &[
+    //         static_str_ref!("VK_LAYER_LUNARG_standard_validation"),
+    //     ];
+
+    //     let create_info = vk::InstanceCreateInfoBuilder::new()
+    //         .application_info(&app_info)
+    //         .enabled_layers(layers)
+    //         .build();
+
+    //     vk::Instance::new(&lib, &create_info)
+    // };
+
+    // // we are just going to use the first physical device
+    // let phy = instance.enumerate_physical_devices()[0];
+
+    // // determine what queues we want to connect to
+    // // just need a command queue, since we are trying to use cache
+    // // coherant memory in round one
+    // let queues = instance.get_physical_device_queue_family_properties(phy);
+    // for (qidx, q) in queues.iter().enumerate() {
+    //     println!("idx {} flags: {}", qidx, q.queueFlags);
+    // }
+
+    // for phy in instance.enumerate_physical_devices() {
+    //     let props    = instance.get_physical_device_properties(phy);
+    //     let features = instance.get_physical_device_features(phy);
+    //     let memory   = instance.get_physical_device_memory_properties(phy);
+
+    //     println!("device name: {}", props.device_name());
+    //     println!("properties {:?}", props.limits);
+    //     println!("features {:?}", instance.get_physical_device_features(phy));
+    //     println!("queues: {:?}", instance.get_physical_device_queue_family_properties(phy));
+    //     println!("memory types: {:?}", instance.get_physical_device_memory_properties(phy).memory_types());
+    //     println!("memory heaps: {:?}", instance.get_physical_device_memory_properties(phy).memory_heaps());
+    // }
+
+    // build a shader
+
+    // create a compute pipeline
+
+    // run
 }

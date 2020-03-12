@@ -1,0 +1,9 @@
+[package]
+name = "generator"
+version = "0.1.0"
+authors = ["David Zmick <david@dpzmick.com>"]
+edition = "2018"
+
+[dependencies]
+vk-parse = "0.3"
+vkxml = "0.3"

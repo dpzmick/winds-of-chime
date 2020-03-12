@@ -5,7 +5,7 @@ macro_rules! bytes_nul_terminate {
 
 #[macro_export]
 macro_rules! static_cstr {
-    ($s:expr) => ( bytes_nul_terminate!($s).as_ptr() as *const std::os::raw::c_char );
+    ($s:expr) => ( crate::bytes_nul_terminate!($s).as_ptr() as *const std::os::raw::c_char );
 }
 
 #[macro_export]

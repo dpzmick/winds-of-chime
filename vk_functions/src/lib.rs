@@ -190,10 +190,10 @@ pub fn vk_functions(strm: TokenStream) -> TokenStream {
             pub fn load<F>(mut f: F) -> Self
                 where F: FnMut( &std::ffi::CStr ) -> *const std::os::raw::c_void
             {
-                Self::load_with_arg( f, std::ptr::null() )
+                Self::load_with_arg( std::ptr::null(), f )
             }
 
-            pub fn load_with_arg<F>(mut f: F, arg: *const std::os::raw::c_void) -> Self
+            pub fn load_with_arg<F>(arg: *const std::os::raw::c_void, mut f: F) -> Self
                 where F: FnMut( &std::ffi::CStr ) -> *const std::os::raw::c_void
             {
                 type Resolver =  unsafe extern "C" fn(
