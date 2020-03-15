@@ -122,11 +122,6 @@ unsafe extern "system" fn vulkan_debug_callback(
 }
 
 fn main() {
-    let surface_resolution = ash::vk::Extent2D {
-        width: 800,
-        height: 800,
-    };
-
     // square
     let vertex_data = [
         Vertex::new([-0.5, -0.5], [1.0, 0.0, 0.0]),
@@ -137,21 +132,21 @@ fn main() {
 
     let indicies: &[u16] = &[0, 1, 2, 2, 3, 0];
 
+    std::env::set_var("WINIT_X11_SCALE_FACTOR", "1");
     let event_loop = winit::event_loop::EventLoop::new();
     let window = winit::window::WindowBuilder::new()
         .with_title("winds of chime")
-        .with_inner_size(winit::dpi::LogicalSize::new(
-            surface_resolution.width as f64,
-            surface_resolution.height as f64))
-        .with_min_inner_size(winit::dpi::LogicalSize::new(
-            surface_resolution.width as f64,
-            surface_resolution.height as f64))
-        .with_max_inner_size(winit::dpi::LogicalSize::new(
-            surface_resolution.width as f64,
-            surface_resolution.height as f64))
         .with_resizable(false)
+        .with_inner_size(winit::dpi::LogicalSize::new(
+            512 as f64,
+            512 as f64))
         .build(&event_loop)
         .expect("Failed to create window");
+
+    let surface_resolution = ash::vk::Extent2D {
+        width: window.inner_size().width,
+        height: window.inner_size().height,
+    };
 
     let lib = ash::Entry::new().unwrap(); // lib loader
     let instance = {
@@ -286,7 +281,6 @@ fn main() {
     println!("caps min {:?}", surface_caps.min_image_extent);
     println!("caps max {:?}", surface_caps.max_image_extent);
     println!("request: {:?}", surface_resolution);
-    panic!("escape!");
 
     let image_cnt = if surface_caps.max_image_count > 0 {
         std::cmp::max(surface_caps.min_image_count+1, surface_caps.max_image_count)
@@ -432,8 +426,6 @@ fn main() {
 
         unsafe { swapchain_loader.create_swapchain(&create_info, None) }
     }.expect("Failed to create swapchain");
-
-    panic!("escape!");
 
     let present_views: Vec<ash::vk::ImageView> =
         unsafe { swapchain_loader.get_swapchain_images(swapchain) }
