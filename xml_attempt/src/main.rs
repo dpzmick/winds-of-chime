@@ -20,8 +20,10 @@ fn main() {
     let contents = helpers::get_file_contents(filename).expect("file");
     let doc = roxml::Document::parse(&contents).expect("xml");
 
-    let parser = ParserBuilder::for_document(&doc)
-        .on_bitmask(print)
+    let parser = Parser::for_document(&doc)
+        .on_platform(print)
+        .on_tag(print)
+        // .on_bitmask(print)
         // .on_bitmask_alias(print)
         .parse_document()
         .expect("parser");
