@@ -493,22 +493,9 @@ mod test_bitmask_field {
     // FIXME test alias
 }
 
-/// <enums name="VkCullModeFlagBits" type="bitmask">
-///    <enum value="0"     name="VK_CULL_MODE_NONE"/>
-///    <enum bitpos="0"    name="VK_CULL_MODE_FRONT_BIT"/>
-///    <enum bitpos="1"    name="VK_CULL_MODE_BACK_BIT"/>
-///    <enum value="0x00000003" name="VK_CULL_MODE_FRONT_AND_BACK"/>
-/// </enums>
-// #[derive(Debug)]
-// pub struct EnumDefinition<'a> {
-//     pub name:     &'a str,
-//     pub fields:   Vec<EnumsField<'a>>,
-// }
-
-// Dynamiclaly dispatch all of these callbacks so that the user
+// Dynamically dispatch all of these callbacks so that the user
 // doesn't have to specify an explict type for the callbacks that they
 // are not interested in (we can't know the type statically).
-// FIXME asses lifetime of closures (in the +)
 pub struct Callbacks<'doc> {
     on_platform:      Option<Box<dyn FnMut(PlatformDefinition<'doc>) + 'doc>>,
     on_tag:           Option<Box<dyn FnMut(TagDefinition<'doc>) + 'doc>>,
@@ -518,6 +505,7 @@ pub struct Callbacks<'doc> {
     on_handle:        Option<Box<dyn FnMut(Handle<'doc>) + 'doc>>,
     on_handle_alias:  Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
     on_enum_def:      Option<Box<dyn FnMut(EnumDefinition<'doc>) + 'doc>>,
+    on_enum_alias:    Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -576,6 +564,13 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_enum_alias(&mut self, b: Alias<'doc>) {
+        match &mut self.on_enum_alias {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -596,6 +591,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_handle:        None,
                 on_handle_alias:  None,
                 on_enum_def:      None,
+                on_enum_alias:    None,
             }
         }
     }
@@ -661,6 +657,14 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         F: FnMut(EnumDefinition<'doc>) + 'doc
     {
         self.callbacks.on_enum_def = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_enum_alias<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Alias<'doc>) + 'doc
+    {
+        self.callbacks.on_enum_alias = Some(Box::new(f));
         self
     }
 
@@ -811,10 +815,21 @@ impl<'doc, 'input> Parser<'doc, 'input> {
     fn parse_enum_def(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
         match xml_type.attribute("name") {
             Some(name) => {
-                self.callbacks.on_enum_definition(EnumDefinition {
-                    name
-                });
-                Ok(())
+                match xml_type.attribute("alias") {
+                    Some(alias) => {
+                        self.callbacks.on_enum_alias(Alias {
+                            basetype:  alias,  // again, confusing. is this right?
+                            aliastype: name,
+                        });
+                        Ok(())
+                    },
+                    None => {
+                        self.callbacks.on_enum_definition(EnumDefinition {
+                            name
+                        });
+                        Ok(())
+                    }
+                }
             },
             None => Err(String::from("Expected 'name' attribute for enum"))
         }
@@ -863,29 +878,6 @@ impl<'doc, 'input> Parser<'doc, 'input> {
     fn parse_bitmask(&mut self, node: roxml::Node<'doc, '_>, enum_name: &'doc str)
         -> Result<(), ParserError>
     {
-        // first, lookup the typedef, we are going to need it
-        // FIXME some of these fail because the enum is a mix of enum/bitmask
-        // those seem to go under the enums section, not the bitmask section in types
-        // let def = match self.bitmasks.get(enum_name) {
-        //     Some(def) => Ok(def),
-        //     None      => Err(format!("No definition found for bitmask {}", enum_name)),
-        // }?;
-
-        // let mut fields = Vec::new();
-        // for field in node.children() {
-        //     if !field.is_element() { continue; }
-        //     let f = BitMaskField::try_from(field)?;
-        //     fields.push(f);
-        // }
-
-        // let bm = BitMask {
-        //     name: enum_name,
-        //     basetype: "VkFlags", // FIXME
-        //     fields: fields,
-        // };
-
-        // self.callbacks.on_bitmask(bm);
-
         Ok(())
     }
 }
