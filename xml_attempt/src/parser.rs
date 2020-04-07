@@ -191,6 +191,13 @@ mod test_typedef {
     }
 }
 
+/// Aliases one bitmask to another
+#[derive(Debug)]
+pub struct BitMaskAlias<'doc> {
+    pub basetype: &'doc str,
+    pub aliastype: &'doc str,
+}
+
 #[derive(Debug)]
 struct Handle {
 }
@@ -386,13 +393,6 @@ mod test_bitmask_field {
 //     pub fields:   Vec<EnumsField<'a>>,
 // }
 
-/// Aliases one bitmask to another
-#[derive(Debug)]
-pub struct BitMaskAlias<'a> {
-    pub basetype: &'a str,
-    pub aliastype: &'a str,
-}
-
 // Dynamiclaly dispatch all of these callbacks so that the user
 // doesn't have to specify an explict type for the callbacks that they
 // are not interested in (we can't know the type statically).
@@ -400,8 +400,9 @@ pub struct BitMaskAlias<'a> {
 pub struct Callbacks<'doc> {
     on_platform:      Option<Box<dyn FnMut(PlatformDefinition<'doc>) + 'doc>>,
     on_tag:           Option<Box<dyn FnMut(TagDefinition<'doc>) + 'doc>>,
-    on_basetype:      Option<Box<dyn FnMut(Typedef<'doc>) +'doc>>,
-    on_bitmask_def:   Option<Box<dyn FnMut(Typedef<'doc>) +'doc>>,
+    on_basetype:      Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
+    on_bitmask_def:   Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
+    on_bitmask_alias: Option<Box<dyn FnMut(BitMaskAlias<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -432,6 +433,13 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_bitmask_alias(&mut self, b: BitMaskAlias<'doc>) {
+        match &mut self.on_bitmask_alias {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -448,6 +456,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_tag:           None,
                 on_basetype:      None,
                 on_bitmask_def:   None,
+                on_bitmask_alias: None,
             }
         }
     }
@@ -481,6 +490,15 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         F: FnMut(Typedef<'doc>) + 'doc
     {
         self.callbacks.on_bitmask_def = Some(Box::new(f));
+        self
+    }
+
+    /// fn(base, alias)
+    pub fn on_bitmask_alias<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(BitMaskAlias<'doc>) + 'doc
+    {
+        self.callbacks.on_bitmask_alias = Some(Box::new(f));
         self
     }
 
@@ -587,12 +605,24 @@ impl<'doc, 'input> Parser<'doc, 'input> {
     }
 
     fn parse_bitmask_def(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        // let (nm, td) = match xml_type.attribute("alias") {
-        //     Some(alias) => self.on_bitmask_definition(BitmaskDefinition::try_from(xml_type)?),
-        //     None        => self.callbacks.on_bitmask_defintion(Typedef::try_from(xml_type)?),
-        // };
-
-        Ok(())
+        match xml_type.attribute("alias") {
+            Some(alias) => {
+                match xml_type.attribute("name") {
+                    Some(name) => {
+                        self.callbacks.on_bitmask_alias(BitMaskAlias {
+                            basetype:  alias, // these names are confusing
+                            aliastype: name,
+                        });
+                        Ok(())
+                    },
+                    None => Err(String::from("Expected a name attribute when alias attribute was found")),
+                }
+            },
+            None => {
+                self.callbacks.on_bitmask_definition(Typedef::try_from(xml_type)?);
+                Ok(())
+            }
+        }
     }
 
     fn parse_handle(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {

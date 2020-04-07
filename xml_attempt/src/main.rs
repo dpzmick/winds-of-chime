@@ -24,8 +24,8 @@ fn main() {
         .on_platform(print)
         .on_tag(print)
         .on_basetype(print)
-        // .on_bitmask(print)
-        // .on_bitmask_alias(print)
+        .on_bitmask_definition(print)
+        .on_bitmask_alias(print)
         .parse_document()
         .expect("parser");
 }
