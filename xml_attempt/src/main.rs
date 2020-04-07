@@ -26,6 +26,8 @@ fn main() {
         .on_basetype(print)
         .on_bitmask_definition(print)
         .on_bitmask_alias(print)
+        .on_handle(print)
+        .on_handle_alias(print)
         .parse_document()
         .expect("parser");
 }

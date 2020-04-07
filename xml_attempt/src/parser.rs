@@ -191,15 +191,126 @@ mod test_typedef {
     }
 }
 
-/// Aliases one bitmask to another
 #[derive(Debug)]
-pub struct BitMaskAlias<'doc> {
-    pub basetype: &'doc str,
+pub struct Alias<'doc> {
+    pub basetype:  &'doc str,
     pub aliastype: &'doc str,
 }
 
 #[derive(Debug)]
-struct Handle {
+pub struct Handle<'doc> {
+    pub parent:      Option<&'doc str>,
+    pub is_dispatch: bool,
+    pub name:        &'doc str,
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Handle<'doc> {
+    type Error = ParserError;
+    fn try_from(xml_type: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        let mut children = xml_type.children(); // iterator
+        let type_tag_txt = match children.next() {
+            Some(type_tag) => {
+                match type_tag.tag_name().name() {
+                    "type" => {
+                        let mut children = type_tag.children();
+                        match children.next() {
+                            Some(child) => {
+                                match children.next() {
+                                    Some(_) => Err(String::from("Too many items inside of <type>")),
+                                    None    => child.text().ok_or(String::from("Expected text inside of <type>")),
+                                }
+                            },
+                            None => Err(String::from("expected <type> to have child"))
+                        }
+                    },
+                    _ => Err(String::from("Expected child to be <type>"))
+                }
+            },
+            None => Err(String::from("Expected child"))
+        }?;
+
+        let is_non_dispatch = type_tag_txt.contains("NON_DISPATCH");
+
+        match children.next() {
+            Some(paren) => {
+                match paren.text().ok_or(String::from("expected text"))? {
+                    "(" => Ok(()),
+                    _   => Err(String::from("expected '("))
+                }
+            },
+            None => Err(String::from("expected more children"))
+        }?;
+
+        // <name>SomeNameHere</name>
+        let name = match children.next() {
+            Some(type_tag) => {
+                match type_tag.tag_name().name() {
+                    "name" => {
+                        let mut children = type_tag.children();
+                        match children.next() {
+                            Some(child) => {
+                                match children.next() {
+                                    Some(_) => Err(String::from("Too many items inside of <name>")),
+                                    None    => child.text().ok_or(String::from("Expected text inside of <name>")),
+                                }
+                            },
+                            None => Err(String::from("expected <name> to have child"))
+                        }
+                    },
+                    _ => Err(String::from("Expected child to be <name>"))
+                }
+            },
+            None => Err(String::from("Expected child"))
+        }?;
+
+        match children.next() {
+            Some(paren) => {
+                match paren.text().ok_or(String::from("expected text"))? {
+                    ")" => Ok(()),
+                    _   => Err(String::from("expected '("))
+                }
+            },
+            None => Err(String::from("expected more children"))
+        }?;
+
+        match children.next() {
+            Some(_) => Err(String::from("expected no more children")),
+            None    => Ok(()),
+        }?;
+
+        Ok(Self {
+            parent:      xml_type.attribute("parent"),
+            is_dispatch: !is_non_dispatch,
+            name:        name,
+        })
+    }
+}
+
+#[cfg(test)]
+mod test_handle {
+    use super::*;
+
+    #[test]
+    fn test_handle_simple() {
+        let xml = "<type category=\"handle\"><type>VK_DEFINE_HANDLE</type>(<name>VkInstance</name>)</type>";
+        test::xml_test(xml, |node| {
+            let handle = Handle::try_from(node).expect("Should not fail");
+            assert_eq!(handle.parent,      None);
+            assert_eq!(handle.is_dispatch, true);
+            assert_eq!(handle.name,        "VkInstance");
+        })
+    }
+
+    #[test]
+    fn test_handle_advanced() {
+        let xml = "<type category=\"handle\" parent=\"VkDescriptorPool\"><type>VK_DEFINE_NON_DISPATCHABLE_HANDLE</type>(<name>VkDescriptorSet</name>)</type>";
+        test::xml_test(xml, |node| {
+            let handle = Handle::try_from(node).expect("Should not fail");
+            assert_eq!(handle.parent,      Some("VkDescriptorPool"));
+            assert_eq!(handle.is_dispatch, false);
+            assert_eq!(handle.name,        "VkDescriptorSet");
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -402,7 +513,9 @@ pub struct Callbacks<'doc> {
     on_tag:           Option<Box<dyn FnMut(TagDefinition<'doc>) + 'doc>>,
     on_basetype:      Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
     on_bitmask_def:   Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
-    on_bitmask_alias: Option<Box<dyn FnMut(BitMaskAlias<'doc>) + 'doc>>,
+    on_bitmask_alias: Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_handle:        Option<Box<dyn FnMut(Handle<'doc>) + 'doc>>,
+    on_handle_alias:  Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -434,8 +547,22 @@ impl<'doc> Callbacks<'doc> {
         }
     }
 
-    fn on_bitmask_alias(&mut self, b: BitMaskAlias<'doc>) {
+    fn on_bitmask_alias(&mut self, b: Alias<'doc>) {
         match &mut self.on_bitmask_alias {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
+
+    fn on_handle(&mut self, b: Handle<'doc>) {
+        match &mut self.on_handle {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
+
+    fn on_handle_alias(&mut self, b: Alias<'doc>) {
+        match &mut self.on_handle_alias {
             Some(cb) => cb(b),
             None     => (),
         }
@@ -457,6 +584,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_basetype:      None,
                 on_bitmask_def:   None,
                 on_bitmask_alias: None,
+                on_handle:        None,
+                on_handle_alias:  None,
             }
         }
     }
@@ -493,12 +622,27 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         self
     }
 
-    /// fn(base, alias)
     pub fn on_bitmask_alias<F>(mut self, f: F) -> Self
     where
-        F: FnMut(BitMaskAlias<'doc>) + 'doc
+        F: FnMut(Alias<'doc>) + 'doc
     {
         self.callbacks.on_bitmask_alias = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_handle<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Handle<'doc>) + 'doc
+    {
+        self.callbacks.on_handle = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_handle_alias<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Alias<'doc>) + 'doc
+    {
+        self.callbacks.on_handle_alias = Some(Box::new(f));
         self
     }
 
@@ -609,7 +753,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
             Some(alias) => {
                 match xml_type.attribute("name") {
                     Some(name) => {
-                        self.callbacks.on_bitmask_alias(BitMaskAlias {
+                        self.callbacks.on_bitmask_alias(Alias {
                             basetype:  alias, // these names are confusing
                             aliastype: name,
                         });
@@ -625,8 +769,25 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         }
     }
 
-    fn parse_handle(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        Ok(())
+    fn parse_handle(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        match xml_type.attribute("alias") {
+            Some(alias) => {
+                match xml_type.attribute("name") {
+                    Some(name) => {
+                        self.callbacks.on_handle_alias(Alias {
+                            basetype:  alias,
+                            aliastype: name,
+                        });
+                        Ok(())
+                    },
+                    None => Err(String::from("Expected a name attribute when alias attribute was found")),
+                }
+            },
+            None => {
+                self.callbacks.on_handle(Handle::try_from(xml_type)?);
+                Ok(())
+            }
+        }
     }
 
     fn parse_enum_def(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
