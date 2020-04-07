@@ -314,7 +314,8 @@ mod test_handle {
 }
 
 #[derive(Debug)]
-struct FunctionPointer {
+pub struct EnumDefinition<'doc> {
+    name: &'doc str,
 }
 
 #[derive(Debug)]
@@ -516,6 +517,7 @@ pub struct Callbacks<'doc> {
     on_bitmask_alias: Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
     on_handle:        Option<Box<dyn FnMut(Handle<'doc>) + 'doc>>,
     on_handle_alias:  Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_enum_def:      Option<Box<dyn FnMut(EnumDefinition<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -567,6 +569,13 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_enum_definition(&mut self, b: EnumDefinition<'doc>) {
+        match &mut self.on_enum_def {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -586,6 +595,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_bitmask_alias: None,
                 on_handle:        None,
                 on_handle_alias:  None,
+                on_enum_def:      None,
             }
         }
     }
@@ -643,6 +653,14 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         F: FnMut(Alias<'doc>) + 'doc
     {
         self.callbacks.on_handle_alias = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_enum_definition<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(EnumDefinition<'doc>) + 'doc
+    {
+        self.callbacks.on_enum_def = Some(Box::new(f));
         self
     }
 
@@ -790,8 +808,16 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         }
     }
 
-    fn parse_enum_def(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        Ok(())
+    fn parse_enum_def(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        match xml_type.attribute("name") {
+            Some(name) => {
+                self.callbacks.on_enum_definition(EnumDefinition {
+                    name
+                });
+                Ok(())
+            },
+            None => Err(String::from("Expected 'name' attribute for enum"))
+        }
     }
 
     fn parse_funcpointer(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {

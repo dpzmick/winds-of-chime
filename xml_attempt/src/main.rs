@@ -28,6 +28,7 @@ fn main() {
         .on_bitmask_alias(print)
         .on_handle(print)
         .on_handle_alias(print)
+        .on_enum_definition(print)
         .parse_document()
         .expect("parser");
 }
