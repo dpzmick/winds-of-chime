@@ -52,7 +52,7 @@ mod test_platform {
     fn test_platform() {
         let xml = "<platform name=\"xlib\" protect=\"VK_USE_PLATFORM_XLIB_KHR\" comment=\"X Window System, Xlib client library\"/>";
         test::xml_test(xml, |node| {
-            let p = Platform::try_from(node).expect("Should not fail");
+            let p = PlatformDefinition::try_from(node).expect("Should not fail");
             assert_eq!(p.name,    "xlib");
             assert_eq!(p.protect, "VK_USE_PLATFORM_XLIB_KHR");
             assert_eq!(p.comment, "X Window System, Xlib client library");
@@ -88,7 +88,7 @@ mod test_tag {
     fn test_tag() {
         let xml = "<tag name=\"ANDROID\"     author=\"Google LLC\"                    contact=\"Jesse Hall @critsec\"/>";
         test::xml_test(xml, |node| {
-            let tag = Tag::try_from(node).expect("Should not fail");
+            let tag = TagDefinition::try_from(node).expect("Should not fail");
             assert_eq!(tag.name,    "ANDROID");
             assert_eq!(tag.author,  "Google LLC");
             assert_eq!(tag.contact, "Jesse Hall @critsec");
@@ -96,12 +96,99 @@ mod test_tag {
     }
 }
 
+/// Anything that is a typedef
+/// typedef struct blah blah_t;
 #[derive(Debug)]
-enum BitMaskDefinition<'a> {
-    /// basetype from typedef
-    Concrete(&'a str),
-    /// other BitMask that we are aliasing
-    Alias(&'a str),
+pub struct Typedef<'doc> {
+    /// struct blah
+    pub basetype: &'doc str,
+
+    /// blah_t
+    pub alias: &'doc str,
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Typedef<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml_type: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        let mut children = xml_type.children();
+        match children.next() {
+            Some(text) => match text.text() {
+                Some("typedef ") => Ok(()), // note the space
+                _ => Err(String::from("Parsing of typedef type failed. Expected text 'typedef'")),
+            },
+            None => Err(String::from("Missing expected text node from typedef")),
+        }?;
+
+        let base = match children.next() {
+            Some(e) => match e.tag_name().name() {
+                "type" => {
+                    let mut children = e.children();
+                    match children.next() {
+                        Some(child) => {
+                            match children.next() {
+                                Some(_) => Err(String::from("Too many items inside of <type>")),
+                                None    => child.text().ok_or(String::from("Expected text inside of <type>")),
+                            }
+                        },
+                        None => Err(String::from("Expected children of <type>"))
+                    }
+                },
+                _ => Err(String::from("Parsing of typedef type failed. Expected a <type> element")),
+            },
+            None => Err(String::from("Missing expected <type> node from typedef")),
+        }?;
+
+        match children.next() {
+            Some(text) => Ok(()),
+            None => Err(String::from("Missing expected text node from typedef")),
+        }?;
+
+        let alias = match children.next() {
+            Some(text) => text.text()
+                .ok_or(String::from("Expected text element while parsing typedef")),
+            None => Err(String::from("Missing expected text node in typedef")),
+        }?;
+
+        match children.next() {
+            Some(text) => match text.text() {
+                Some(";") => Ok(()),
+                _         => Err(String::from("Missing ';' in typedef")),
+            },
+            None => Err(String::from("Missing expected ';' text node in typedef")),
+        }?;
+
+        if children.next().is_some() {
+            return Err(String::from("Parsing of typedef failed. Found more elements, expected none"));
+        }
+
+        Ok(Self { basetype: base, alias })
+    }
+}
+
+#[cfg(test)]
+mod test_typedef {
+    use super::*;
+
+    #[test]
+    fn test_basetype() {
+        let xml = "<type category=\"basetype\">typedef <type>uint64_t</type> <name>VkDeviceSize</name>;</type>";
+        test::xml_test(xml, |node| {
+            let tag = Typedef::try_from(node).expect("Should not fail");
+            assert_eq!(tag.basetype, "uint64_t");
+            assert_eq!(tag.alias,    "VkDeviceSize");
+        })
+    }
+
+    #[test]
+    fn test_bitmask() {
+        let xml = "<type requires=\"VkRenderPassCreateFlagBits\" category=\"bitmask\">typedef <type>VkFlags</type> <name>VkRenderPassCreateFlags</name>;</type>";
+        test::xml_test(xml, |node| {
+            let tag = Typedef::try_from(node).expect("Should not fail");
+            assert_eq!(tag.basetype, "VkFlags");
+            assert_eq!(tag.alias,    "VkRenderPassCreateFlags");
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -313,8 +400,8 @@ pub struct BitMaskAlias<'a> {
 pub struct Callbacks<'doc> {
     on_platform:      Option<Box<dyn FnMut(PlatformDefinition<'doc>) + 'doc>>,
     on_tag:           Option<Box<dyn FnMut(TagDefinition<'doc>) + 'doc>>,
-    // on_bitmask:       Option<Box<dyn FnMut(BitMask<'doc>) + 'doc>>,
-    // on_bitmask_alias: Option<Box<dyn FnMut(BitMaskAlias<'doc>) + 'doc>>,
+    on_basetype:      Option<Box<dyn FnMut(Typedef<'doc>) +'doc>>,
+    on_bitmask_def:   Option<Box<dyn FnMut(Typedef<'doc>) +'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -332,19 +419,19 @@ impl<'doc> Callbacks<'doc> {
         }
     }
 
-    // fn on_bitmask(&mut self, b: BitMask<'doc>) {
-    //     match &mut self.on_bitmask {
-    //         Some(cb) => cb(b),
-    //         None     => (),
-    //     }
-    // }
+    fn on_basetype(&mut self, b: Typedef<'doc>) {
+        match &mut self.on_basetype {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 
-    // fn on_bitmask_alias(&mut self, b: BitMaskAlias<'doc>) {
-    //     match &mut self.on_bitmask_alias {
-    //         Some(cb) => cb(b),
-    //         None     => (),
-    //     }
-    // }
+    fn on_bitmask_definition(&mut self, b: Typedef<'doc>) {
+        match &mut self.on_bitmask_def {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -359,8 +446,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
             callbacks: Callbacks {
                 on_platform:      None,
                 on_tag:           None,
-                // on_bitmask:       None,
-                // on_bitmask_alias: None,
+                on_basetype:      None,
+                on_bitmask_def:   None,
             }
         }
     }
@@ -381,21 +468,21 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         self
     }
 
-    // pub fn on_bitmask<F>(mut self, f: F) -> Self
-    // where
-    //     F: FnMut(BitMask<'doc>) + 'doc
-    // {
-    //     self.callbacks.on_bitmask = Some(Box::new(f));
-    //     self
-    // }
+    pub fn on_basetype<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Typedef<'doc>) + 'doc
+    {
+        self.callbacks.on_basetype = Some(Box::new(f));
+        self
+    }
 
-    // pub fn on_bitmask_alias<F>(mut self, f: F) -> Self
-    // where
-    //     F: FnMut(BitMaskAlias<'doc>) + 'doc
-    // {
-    //     self.callbacks.on_bitmask_alias = Some(Box::new(f));
-    //     self
-    // }
+    pub fn on_bitmask_definition<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Typedef<'doc>) + 'doc
+    {
+        self.callbacks.on_bitmask_def = Some(Box::new(f));
+        self
+    }
 
     pub fn parse_document(mut self) -> Result<(), ParserError> {
         let registry = self.document.root_element();
@@ -478,8 +565,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
             match category {
                 "include"     => continue,
                 "define"      => continue,
-                //"basetype"    => self.parse_typedef(xml_type)?,
-                "basetype"    => (),
+                "basetype"    => self.parse_basetype(xml_type)?,
                 "bitmask"     => self.parse_bitmask_def(xml_type)?,
                 "handle"      => self.parse_handle(xml_type)?,
                 "enum"        => self.parse_enum_def(xml_type)?,
@@ -495,79 +581,16 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         Ok(())
     }
 
-    fn parse_typedef_no_insert(xml_type: roxml::Node<'doc, '_>)
-       -> Result<(&'doc str, &'doc str), ParserError>
-    {
-        let mut children = xml_type.children();
-        match children.next() {
-            Some(text) => match text.text() {
-                Some("typedef ") => Ok(()), // note the space
-                _ => Err(String::from("Parsing of typedef type failed. Expected text 'typedef'")),
-            },
-            None => Err(String::from("Missing expected text node from typedef")),
-        }?;
-
-        match children.next() {
-            Some(e) => match e.tag_name().name() {
-                "type" => Ok(()), // all good
-                _ => Err(String::from("Parsing of typedef type failed. Expected a <type> element")),
-            },
-            None => Err(String::from("Missing expected <type> node from typedef")),
-        }?;
-
-        let base = match children.next() {
-            Some(text) => text.text()
-                .ok_or(String::from("Parsing of typedef type failed. Expected text")),
-            None => Err(String::from("Missing expected text node from typedef")),
-        }?;
-
-        let alias = match children.next() {
-            Some(text) => text.text()
-                .ok_or(String::from("Expected text element while parsing typedef")),
-            None => Err(String::from("Missing expected text node in typedef")),
-        }?;
-
-        match children.next() {
-            Some(text) => match text.text() {
-                Some(";") => Ok(()),
-                _         => Err(String::from("Missing ';' in typedef")),
-            },
-            None => Err(String::from("Missing expected ';' text node in typedef")),
-        }?;
-
-        if children.next().is_some() {
-            return Err(String::from("Parsing of category=basetype type failed. Found more elements, expected none"));
-        }
-
-        Ok( (alias, base) )
+    fn parse_basetype(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        self.callbacks.on_basetype(Typedef::try_from(xml_type)?);
+        Ok(())
     }
 
-    // fn parse_typedef(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-    //     let (alias, base) = Self::parse_typedef_no_insert(xml_type)?;
-    //     match self.typedefs.insert(alias, base) {
-    //         Some(_) => Err(format!("Found multiple typedefs for alias='{}", alias)),
-    //         None => Ok(()),
-    //     }
-    // }
-
     fn parse_bitmask_def(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        let (nm, td) = match xml_type.attribute("alias") {
-            Some(alias) => {
-                let nm = expect_attr(xml_type, "name")?;
-                // FIXME dispatch callback here? Or should I wait
-                // until I also know the concrete type
-                (nm, BitMaskDefinition::Alias(alias))
-            },
-            None => {
-                let (alias, base) = Self::parse_typedef_no_insert(xml_type)?;
-                (alias, BitMaskDefinition::Concrete(base))
-            }
-        };
-
-        // match self.bitmasks.insert(nm, td) {
-        //     Some(_) => Err(format!("Found multiple bitmasks with name='{}", nm)),
-        //     None => Ok(()),
-        // }
+        // let (nm, td) = match xml_type.attribute("alias") {
+        //     Some(alias) => self.on_bitmask_definition(BitmaskDefinition::try_from(xml_type)?),
+        //     None        => self.callbacks.on_bitmask_defintion(Typedef::try_from(xml_type)?),
+        // };
 
         Ok(())
     }
