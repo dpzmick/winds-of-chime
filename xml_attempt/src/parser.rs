@@ -3,6 +3,8 @@ use roxmltree as roxml;
 
 // stdlib
 use std::convert::TryFrom;
+use std::fs;
+use std::io::Write;
 
 /// None of the errors are recoverable.
 /// We attempt to keep them human readable
@@ -23,6 +25,43 @@ mod test {
 
 fn expect_attr<'a>(node: roxml::Node<'a, '_>, n: &str) -> Result<&'a str, ParserError> {
     node.attribute(n).ok_or(String::from(n))
+}
+
+// unhappy with having to allocate here
+fn squash<'doc>(node: roxml::Node<'doc, '_>) -> String {
+    // squash to string, skipping comments
+    let mut squash = String::new();
+    for child in node.children() {
+        match child.node_type() {
+            roxml::NodeType::Element => {
+                if child.tag_name().name() == "comment" { continue; }
+                for part in child.descendants() {
+                    if part.node_type() != roxml::NodeType::Text { continue; }
+                    squash.push_str(
+                        &(String::from(" ") + part.text().unwrap())
+                    );
+                }
+            },
+            roxml::NodeType::Text => {
+                squash.push_str(
+                    &(String::from(" ") + child.text().unwrap())
+                );
+            },
+            _ => panic!("unexpected node type"), // FIXME
+        }
+
+    }
+
+    squash.push(';');
+    squash
+}
+
+// FIXME errors
+fn to_tu<'a, 'b>(index: &'a clang::Index, s: &'b str) -> clang::TranslationUnit<'a> {
+    // FIXME temp file path
+    let mut tmpfile = fs::File::create("test.c").unwrap();
+    write!(tmpfile, "{}", s).unwrap();
+    index.parser("test.c").parse().expect("Failed to parse")
 }
 
 #[derive(Debug)]
@@ -319,6 +358,151 @@ pub struct EnumDefinition<'doc> {
 }
 
 #[derive(Debug)]
+pub struct FunctionPointerType {
+    pub return_type:    Type,
+    pub argument_types: Vec<Type>,
+}
+
+#[derive(Debug)]
+pub enum Types {
+    FunctionPointer(FunctionPointerType),
+    Pointer(Box<Type>),
+    Base(String /* FIXME don't allocate? */),
+    BoundedArray(usize, Box<Type>),
+}
+
+#[derive(Debug)]
+pub struct Type {
+    pub mutable: bool,
+    pub ty:      Box<Types>,
+}
+
+impl Type {
+    fn from_ctype(ctype: &clang::Type) -> Self {
+        match ctype.get_kind() {
+            clang::TypeKind::Int =>  {
+                match ctype.get_display_name().as_str() {
+                    "int" => Type {
+                        mutable: true,
+                        ty: Box::new(Types::Base(String::from("int"))),
+                    },
+                    "const int" => Type {
+                        mutable: false,
+                        ty: Box::new(Types::Base(String::from("int"))),
+                    },
+                    _ => panic!("unhandled int type {}", ctype.get_display_name()),
+                }
+            },
+            clang::TypeKind::Float => {
+                match ctype.get_display_name().as_str() {
+                    "float"  => Type {
+                        mutable: true,
+                        ty: Box::new(Types::Base(String::from("float"))),
+                    },
+                    "const float"  => Type {
+                        mutable: false,
+                        ty: Box::new(Types::Base(String::from("float"))),
+                    },
+                    _ => panic!("unhandled float type {}", ctype.get_display_name()),
+                }
+            },
+            clang::TypeKind::CharS => Type {
+                mutable: ctype.is_const_qualified(),
+                ty: Box::new(Types::Base(String::from("char"))), // FIXME always a char?
+            },
+            clang::TypeKind::Record => Type {
+                mutable: !ctype.is_const_qualified(),
+                ty: Box::new(Types::Base(ctype.get_display_name())),
+            },
+            clang::TypeKind::Pointer => {
+                let base_ctype = ctype.get_pointee_type().unwrap();
+                let base = Type::from_ctype(&base_ctype);
+                Type {
+                    mutable: !ctype.is_const_qualified(),
+                    ty: Box::new(Types::Pointer(Box::new(base))),
+                }
+            },
+            clang::TypeKind::Void => Type {
+                mutable: !ctype.is_const_qualified(),
+                ty: Box::new(Types::Base(String::from("void")))
+            },
+            // this is something like 'struct S'
+            // rip the struct off and use the real name
+            clang::TypeKind::Elaborated => {
+                let elab = ctype.get_elaborated_type().unwrap();
+                Type::from_ctype(&elab) // idk
+            },
+            clang::TypeKind::ConstantArray => {
+                let element = ctype.get_element_type().unwrap();
+                let size    = ctype.get_size().unwrap();
+                let base    = Type::from_ctype(&element);
+                Type {
+                    mutable: !ctype.is_const_qualified(),
+                    ty: Box::new(Types::BoundedArray(size, Box::new(base)))
+                }
+            },
+            clang::TypeKind::FunctionPrototype => {
+                let ret =  Type::from_ctype(&ctype.get_result_type().unwrap());
+                let args = ctype.get_argument_types().unwrap().iter()
+                    .map(|t| Type::from_ctype(t))
+                    .collect::<Vec<_>>();
+
+                Type {
+                    mutable: !ctype.is_const_qualified(),
+                    ty: Box::new(Types::FunctionPointer(FunctionPointerType {
+                        return_type: ret,
+                        argument_types: args,
+                    }))
+                }
+            },
+            _ => panic!("unhandled kind {:?}", ctype.get_kind()), // FIXME better error handling
+        }
+    }
+
+    fn from_c_decl<'a>(clang: &'a clang::Clang, decl: &str) -> (Self, String) {
+        let index = clang::Index::new(&clang, false, false);
+        let tu = to_tu(&index, decl);
+
+        let mut ret = None;
+        tu.get_entity().visit_children(|child, _| {
+            // for some reason, libclang things that vardecl with a
+            // struct is a struct decl and a var decl
+            // skip struct decl
+
+            match child.get_kind() {
+                clang::EntityKind::StructDecl => {
+                    return clang::EntityVisitResult::Continue;
+                },
+                clang::EntityKind::VarDecl => {
+                    let var_name = child.get_name().unwrap(); // this is the easiest place to get this
+                    let typ      = Type::from_ctype(&child.get_type().unwrap());
+                    ret = Some( (typ, var_name) );
+
+                    return clang::EntityVisitResult::Break;
+                },
+                // HACK, if this is a typedef, if must be a function pointer
+                // just roll with it
+                clang::EntityKind::TypedefDecl => {
+                    let defname = child.get_name().unwrap();
+                    let typ = Type::from_ctype(&child.get_type().unwrap().get_canonical_type());
+                    ret = Some( (typ, defname) );
+                    return clang::EntityVisitResult::Break;
+                },
+                _ => panic!("should be only vardecl or structdecl, got {:?}", child.get_kind()),
+            }
+        });
+
+        ret.unwrap()
+    }
+}
+
+#[derive(Debug)]
+pub struct FunctionPointer<'doc> {
+    pub name: &'doc str,
+    pub typ:  Type,
+}
+
+#[derive(Debug)]
 struct Struct {
     // structs..., NOTE: some struct members have a value attribute
     //             NOTE: some struct members have noautovalidity attribute
@@ -497,15 +681,16 @@ mod test_bitmask_field {
 // doesn't have to specify an explict type for the callbacks that they
 // are not interested in (we can't know the type statically).
 pub struct Callbacks<'doc> {
-    on_platform:      Option<Box<dyn FnMut(PlatformDefinition<'doc>) + 'doc>>,
-    on_tag:           Option<Box<dyn FnMut(TagDefinition<'doc>) + 'doc>>,
-    on_basetype:      Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
-    on_bitmask_def:   Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
-    on_bitmask_alias: Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
-    on_handle:        Option<Box<dyn FnMut(Handle<'doc>) + 'doc>>,
-    on_handle_alias:  Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
-    on_enum_def:      Option<Box<dyn FnMut(EnumDefinition<'doc>) + 'doc>>,
-    on_enum_alias:    Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_platform:           Option<Box<dyn FnMut(PlatformDefinition<'doc>) + 'doc>>,
+    on_tag:                Option<Box<dyn FnMut(TagDefinition<'doc>) + 'doc>>,
+    on_basetype:           Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
+    on_bitmask_definition: Option<Box<dyn FnMut(Typedef<'doc>) + 'doc>>,
+    on_bitmask_alias:      Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_handle:             Option<Box<dyn FnMut(Handle<'doc>) + 'doc>>,
+    on_handle_alias:       Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_enum_definition:    Option<Box<dyn FnMut(EnumDefinition<'doc>) + 'doc>>,
+    on_enum_alias:         Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_function_pointer:   Option<Box<dyn FnMut(FunctionPointer<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -531,7 +716,7 @@ impl<'doc> Callbacks<'doc> {
     }
 
     fn on_bitmask_definition(&mut self, b: Typedef<'doc>) {
-        match &mut self.on_bitmask_def {
+        match &mut self.on_bitmask_definition {
             Some(cb) => cb(b),
             None     => (),
         }
@@ -559,7 +744,7 @@ impl<'doc> Callbacks<'doc> {
     }
 
     fn on_enum_definition(&mut self, b: EnumDefinition<'doc>) {
-        match &mut self.on_enum_def {
+        match &mut self.on_enum_definition {
             Some(cb) => cb(b),
             None     => (),
         }
@@ -571,10 +756,18 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_function_pointer(&mut self, b: FunctionPointer<'doc>) {
+        match &mut self.on_function_pointer {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
     document:  &'doc roxml::Document<'input>,
+    clang_ctx: clang::Clang,
     callbacks: Callbacks<'doc>
 }
 
@@ -582,16 +775,18 @@ impl<'doc, 'input> Parser<'doc, 'input> {
     pub fn for_document(document: &'doc roxml::Document<'input>) -> Self {
         Self {
             document,
+            clang_ctx: clang::Clang::new().expect("Failed to init clang"), // FIXME?
             callbacks: Callbacks {
-                on_platform:      None,
-                on_tag:           None,
-                on_basetype:      None,
-                on_bitmask_def:   None,
-                on_bitmask_alias: None,
-                on_handle:        None,
-                on_handle_alias:  None,
-                on_enum_def:      None,
-                on_enum_alias:    None,
+                on_platform:           None,
+                on_tag:                None,
+                on_basetype:           None,
+                on_bitmask_definition: None,
+                on_bitmask_alias:      None,
+                on_handle:             None,
+                on_handle_alias:       None,
+                on_enum_definition:    None,
+                on_enum_alias:         None,
+                on_function_pointer:   None,
             }
         }
     }
@@ -624,7 +819,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
     where
         F: FnMut(Typedef<'doc>) + 'doc
     {
-        self.callbacks.on_bitmask_def = Some(Box::new(f));
+        self.callbacks.on_bitmask_definition = Some(Box::new(f));
         self
     }
 
@@ -656,7 +851,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
     where
         F: FnMut(EnumDefinition<'doc>) + 'doc
     {
-        self.callbacks.on_enum_def = Some(Box::new(f));
+        self.callbacks.on_enum_definition = Some(Box::new(f));
         self
     }
 
@@ -665,6 +860,14 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         F: FnMut(Alias<'doc>) + 'doc
     {
         self.callbacks.on_enum_alias = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_function_pointer<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(FunctionPointer<'doc>) + 'doc
+    {
+        self.callbacks.on_function_pointer = Some(Box::new(f));
         self
     }
 
@@ -835,7 +1038,30 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         }
     }
 
-    fn parse_funcpointer(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_funcpointer(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        let s = squash(xml_type);
+        let t = Type::from_c_decl(&self.clang_ctx, &s); // FIXME errors, also this name is wrong
+
+        // go find the name, the name we got from clang isn't right
+        // FIXME is the rest of the stuff we got from clang right??
+        let mut children = xml_type.children();
+        match children.next() {
+            Some(_) => Ok(()),
+            None    => Err(String::from("Expected children")),
+        }?;
+
+        let name = match children.next() {
+            Some(name_node) => match name_node.text() {
+                Some(name) => Ok(name),
+                None       => Err(String::from("Expected text inside of <name></name>")),
+            },
+            None => Err(String::from("Expected more children")),
+        }?;
+
+        self.callbacks.on_function_pointer(FunctionPointer {
+            name: name,
+            typ: t.0,
+        });
         Ok(())
     }
 
