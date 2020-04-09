@@ -1,5 +1,6 @@
 // crates
 use roxmltree as roxml;
+use lazy_static::lazy_static;
 
 // stdlib
 use std::convert::TryFrom;
@@ -21,6 +22,18 @@ mod test {
         println!("xml: {:?}", xml);
         f(xml.root_element())
     }
+
+    lazy_static! {
+        static ref CLANG_LOCK: std::sync::Mutex<clang::Clang> = std::sync::Mutex::new(
+            clang::Clang::new().expect("clang failed")
+        );
+    }
+
+    pub fn clang() -> std::sync::MutexGuard<'static, clang::Clang> {
+        CLANG_LOCK.lock().expect("Failed to lock")
+    }
+
+    // can't have more than one clang context at a time
 }
 
 fn expect_attr<'a>(node: roxml::Node<'a, '_>, n: &str) -> Result<&'a str, ParserError> {
@@ -357,13 +370,13 @@ pub struct EnumDefinition<'doc> {
     name: &'doc str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionPointerType {
     pub return_type:    Type,
     pub argument_types: Vec<Type>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Types {
     FunctionPointer(FunctionPointerType),
     Pointer(Box<Type>),
@@ -371,7 +384,7 @@ pub enum Types {
     BoundedArray(usize, Box<Type>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Type {
     pub mutable: bool,
     pub ty:      Box<Types>,
@@ -502,179 +515,106 @@ pub struct FunctionPointer<'doc> {
     pub typ:  Type,
 }
 
-#[derive(Debug)]
-struct Struct {
-    // structs..., NOTE: some struct members have a value attribute
-    //             NOTE: some struct members have noautovalidity attribute
-    //             NOTE: some struct members have optional attribute
-    //             NOTE: some struct members have the 'len' attribute
-}
+// FIXME test function pointer construction
 
 #[derive(Debug)]
-pub struct EnumValueField<'a> {
-    /// The vulkan name, e.g. VK_CULL_MODE_NONE
-    pub name: &'a str,
-
-    /// Whatever value was in the XML
-    pub value: &'a str, // FIXME
-
-    /// Comment, if it existed in the original document
-    pub comment: Option<&'a str>,
+pub struct StructMember<'doc> {
+    pub name:           String,   // fixme don't allocate
+    pub typ:            Type,
+    pub values:         Option<&'doc str>,    // FIXME separate commas?
+    pub len:            Option<&'doc str>,    // FIXME separate commas?
+    pub altlen:         Option<&'doc str>,
+    pub noautovalidity: bool,
+    pub optional:       bool,
 }
 
-#[derive(Debug)]
-pub struct EnumAliasField<'a> {
-    /// The vulkan name of *this field*, e.g. VK_CULL_MODE_NONE
-    pub name: &'a str,
+impl<'doc> StructMember<'doc> {
+    fn from_xml(clang: &clang::Clang, xml: roxml::Node<'doc, '_>) -> Result<Self, ParserError> {
+        let get_bool = |nm| {
+            if let Some(v) = xml.attribute(nm) {
+                match v {
+                    "true"  => Ok(true),
+                    "false" => Ok(false),
+                    _       => Err(format!("Expected either true of false for {}", nm)),
+                }
+            }
+            else {
+                Ok(false)
+            }
+        };
 
-    /// The field that this field is an alias of
-    pub basefield: &'a str,
+        // get name and type from squash
+        let s = squash(xml) + ";";
+        let (typ, name) = Type::from_c_decl(clang, &s); // FIXME errors
 
-    /// Comment, if it existed in the original document
-    pub comment: Option<&'a str>,
-}
-
-#[derive(Debug)]
-pub struct BitPosField<'a> {
-    /// The vulkan name, e.g. VK_QUEUE_GRAPHICS_BIT
-    pub name:    &'a str,
-
-    /// Which bit should be set to '1' to set this field to true
-    pub bitpos:  u32,
-
-    /// Comment, if it existed in the original document
-    pub comment: Option<&'a str>,
-}
-
-#[derive(Debug)]
-pub enum BitMaskField<'a> {     // FIXME looks like this might be better named "enum field" since some "enums" have bitmask
-    Value(EnumValueField<'a>),
-    BitPos(BitPosField<'a>),
-    Alias(EnumAliasField<'a>),
-}
-
-impl<'a> TryFrom<roxml::Node<'a, '_>> for BitMaskField<'a> {
-    type Error = ParserError;
-
-    fn try_from(field: roxml::Node<'a, '_>) -> Result<Self, Self::Error> {
-        match field.tag_name().name() {
-            "enum" => Ok(()),
-            _ => Err(format!("Expected <enum> tag, found {}.", field.tag_name().name())),
-        }?;
-
-        let name = field.attribute("name")
-            .ok_or(String::from("<enum> tag missing name attribute for enum {}"))?;
-
-        // FIXME rewrite with one big match statement, less error prone probably
-        let is_bit   = field.has_attribute("bitpos");
-        let is_value = field.has_attribute("value");
-        let is_alias = field.has_attribute("alias");
-
-        if is_bit && !is_value && !is_alias {
-            let bitpos = field.attribute("bitpos").unwrap();
-            let bitpos = match bitpos.parse::<u32>() {
-                Ok(bitpos) => Ok(bitpos),
-                Err(_)     => Err(format!("Expecting int for bitpos, got {}", bitpos)),
-            }?;
-
-            Ok(Self::BitPos(BitPosField {
-                name:    name,
-                bitpos:  bitpos,
-                comment: field.attribute("comment"),
-            }))
-        }
-        else if !is_bit && is_value && !is_alias {
-            let value = field.attribute("value").unwrap();
-            // FIXME parse value?
-            Ok(Self::Value(EnumValueField {
-                name:    name,
-                value:   value,
-                comment: field.attribute("comment"),
-            }))
-        }
-        else if !is_bit && !is_value && is_alias {
-            let alias = field.attribute("alias").unwrap(); // FIXME check if this direction is correct
-            Ok(Self::Alias(EnumAliasField {
-                name:      name,
-                basefield: alias,
-                comment:   field.attribute("comment"),
-            }))
-        }
-        else {
-            Err(format!("<enum> tag did not have exactly one of bitpos, value, or alias for field {}", name))
-        }
+        Ok(Self {
+            name:           name,
+            typ:            typ,
+            values:         xml.attribute("values"),
+            len:            xml.attribute("len"),
+            altlen:         xml.attribute("altlen"),
+            noautovalidity: get_bool("noautovalidity")?,
+            optional:       get_bool("optional")?,
+        })
     }
 }
 
 #[cfg(test)]
-mod test_bitmask_field {
+mod struct_member_test {
     use super::*;
 
+    // FIXME libclang is eating the types, shit!
     #[test]
-    fn test_bitpos() {
-        let xml = "<enum bitpos=\"0\"    name=\"VK_CULL_MODE_FRONT_BIT\"/>";
+    fn test_simple() {
+        let xml = "<member><type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let b = BitMaskField::try_from(node).expect("should not fail");
-            match b {
-                BitMaskField::BitPos(bitpos) => {
-                    assert_eq!(bitpos.name,    "VK_CULL_MODE_FRONT_BIT");
-                    assert_eq!(bitpos.bitpos,  0);
-                    assert_eq!(bitpos.comment, None);
-                },
-                _ => panic!("incorrect type"),
-            }
+            let m = StructMember::from_xml(&test::clang(), node).expect("should not fail");
+            assert_eq!(m.name, "width");
+            assert_eq!(m.typ, Type { mutable: false, ty: Box::new(Types::Base(String::from("uint32_t")))});
+            assert_eq!(m.values,         None);
+            assert_eq!(m.len,            None);
+            assert_eq!(m.altlen,         None);
+            assert_eq!(m.noautovalidity, false);
+            assert_eq!(m.optional,       false);
         });
     }
 
     #[test]
-    fn test_bitpos_comment() {
-        let xml = "<enum bitpos=\"0\"    name=\"VK_CULL_MODE_FRONT_BIT\" comment=\"cull front\"/>";
+    fn test_noautovalidity() {
+        let xml = "<member noautovalidity=\"true\"><type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let b = BitMaskField::try_from(node).expect("should not fail");
-            match b {
-                BitMaskField::BitPos(bitpos) => {
-                    assert_eq!(bitpos.name,    "VK_CULL_MODE_FRONT_BIT");
-                    assert_eq!(bitpos.bitpos,  0);
-                    assert_eq!(bitpos.comment, Some("cull front"));
-                },
-                _ => panic!("incorrect type"),
-            }
+            let m = StructMember::from_xml(&test::clang(), node).expect("should not fail");
+            assert_eq!(m.name, "width");
+            assert_eq!(m.typ, Type { mutable: false, ty: Box::new(Types::Base(String::from("uint32_t")))});
+            assert_eq!(m.values,         None);
+            assert_eq!(m.len,            None);
+            assert_eq!(m.altlen,         None);
+            assert_eq!(m.noautovalidity, true);
+            assert_eq!(m.optional,       false);
         });
     }
 
-    #[test]
-    fn test_value() {
-        let xml = "<enum value=\"0\"  name=\"VK_CULL_MODE_NONE\"/>";
-        test::xml_test(xml, |node| {
-            let b = BitMaskField::try_from(node).expect("should not fail");
-            match b {
-                BitMaskField::Value(value) => {
-                    assert_eq!(value.name,    "VK_CULL_MODE_NONE");
-                    assert_eq!(value.value,   "0");
-                    assert_eq!(value.comment, None);
-                },
-                _ => panic!("wrong type"),
-            }
-        });
-    }
+    // FIXME test rest of attributes
+    // FIXME test more interesting types like function pointers?
+}
 
-    #[test]
-    fn test_comment() {
-        let xml = "<enum value=\"0\"  name=\"VK_CULL_MODE_NONE\" comment=\"no cull\"/>";
-        test::xml_test(xml, |node| {
-            let b = BitMaskField::try_from(node).expect("should not fail");
-            match b {
-                BitMaskField::Value(value) => {
-                    assert_eq!(value.name,    "VK_CULL_MODE_NONE");
-                    assert_eq!(value.value,   "0");
-                    assert_eq!(value.comment, Some("no cull"));
-                },
-                _ => panic!("wrong type"),
-            }
-        });
-    }
+#[derive(Debug)]
+struct Struct<'doc> {
+    pub name:          &'doc str,
+    pub returned_only: bool,
+    pub members:       Vec<StructMember<'doc>>,
+}
 
-    // FIXME test alias
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
+    type Error = ParserError;
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        Err(String::from("unimplemented"))
+    }
+}
+
+#[cfg(test)]
+mod struct_test {
+    use super::*;
 }
 
 // Dynamically dispatch all of these callbacks so that the user
