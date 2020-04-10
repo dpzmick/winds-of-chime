@@ -390,12 +390,10 @@ pub struct Type<'doc> {
 //     pub typ:  Type,
 // }
 
-// FIXME test function pointer construction
-
 /// All of these members are exacly what is in the document with very
 /// little processing
 #[derive(Debug)]
-pub struct StructMember<'doc> {
+pub struct Member<'doc> {
     pub name:           &'doc str,
     pub typ:            Type<'doc>,
     pub values:         Option<&'doc str>,
@@ -405,7 +403,7 @@ pub struct StructMember<'doc> {
     pub optional:       Option<&'doc str>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for StructMember<'doc> {
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Member<'doc> {
     type Error = ParserError;
 
     fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
@@ -609,14 +607,14 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for StructMember<'doc> {
 }
 
 #[cfg(test)]
-mod struct_member_test {
+mod member_test {
     use super::*;
 
     #[test]
     fn test_simple() {
         let xml = "<member><type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: true, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -631,7 +629,7 @@ mod struct_member_test {
     fn test_no_spaces() {
         let xml = "<member><type>uint32_t</type><name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: true, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -646,7 +644,7 @@ mod struct_member_test {
     fn test_noautovalidity() {
         let xml = "<member noautovalidity=\"true\"><type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: true, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -661,7 +659,7 @@ mod struct_member_test {
     fn test_const() {
         let xml = "<member>const <type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: false, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -676,7 +674,7 @@ mod struct_member_test {
     fn test_ptr1() {
         let xml = "<member>const <type>uint32_t</type>*        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -692,7 +690,7 @@ mod struct_member_test {
     fn test_ptr2() {
         let xml = "<member>const <type>uint32_t</type>**     <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -711,7 +709,7 @@ mod struct_member_test {
     fn test_ptr_nasty() {
         let xml = "<member>const <type>uint32_t</type>* const*     <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -730,7 +728,7 @@ mod struct_member_test {
     fn test_arr_constant() {
         let xml = "<member><type>uint32_t</type><name>width</name>[2]</member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -748,7 +746,7 @@ mod struct_member_test {
     fn test_arr_str() {
         let xml = "<member><type>uint32_t</type><name>width</name>[<enum>VK_CONSTANT_OF_SOME_SORT</enum>]</member>";
         test::xml_test(xml, |node| {
-            let m = StructMember::try_from(node).expect("should not fail");
+            let m = Member::try_from(node).expect("should not fail");
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -771,7 +769,7 @@ pub struct Struct<'doc> {
     pub name:          &'doc str,
     pub structextends: Option<&'doc str>,
     pub returnedonly:  bool,
-    pub members:       Vec<StructMember<'doc>>,
+    pub members:       Vec<Member<'doc>>,
 }
 
 impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
@@ -783,8 +781,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
             if member.node_type() == roxml::NodeType::Text { continue; }
             if member.node_type() == roxml::NodeType::Comment { continue; }
             if member.tag_name().name() == "comment" { continue; }
-            // println!("struct {} member {:?}", name, member);
-            members.push( StructMember::try_from(member)? );
+            members.push( Member::try_from(member)? );
         }
 
         Ok(Struct {
@@ -819,6 +816,55 @@ mod struct_test {
             assert_eq!(m.returnedonly, true);
             assert_eq!(m.structextends, None);
             assert_eq!(m.members.len(), 7);
+        });
+    }
+}
+
+#[derive(Debug)]
+pub struct Union<'doc> {
+    pub name:    &'doc str,
+    pub members: Vec<Member<'doc>>,
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Union<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        let name = xml.attribute("name").ok_or(
+            String::from("no name attribute found on union")
+        )?;
+
+        let mut members = Vec::new();
+        for member in xml.children() {
+            if member.node_type() == roxml::NodeType::Text { continue; }
+            if member.node_type() == roxml::NodeType::Comment { continue; }
+            if member.tag_name().name() == "comment" { continue; }
+            members.push(Member::try_from(member)?);
+        }
+
+        Ok(Self {name, members})
+    }
+}
+
+#[cfg(test)]
+mod union_test {
+    use super::*;
+
+    #[test]
+    fn test_union() {
+        let xml = r#"<type category="union" name="VkPerformanceCounterResultKHR" comment="// Union of all the possible return types a counter result could return">
+    <member><type>int32_t</type>  <name>int32</name></member>
+    <member><type>int64_t</type>  <name>int64</name></member>
+    <member><type>uint32_t</type> <name>uint32</name></member>
+    <member><type>uint64_t</type> <name>uint64</name></member>
+    <member><type>float</type>    <name>float32</name></member>
+    <member><type>double</type>   <name>float64</name></member>
+</type>
+"#;
+        test::xml_test(xml, |node| {
+            let m = Union::try_from(node).expect("should not fail");
+            assert_eq!(m.name, "VkPerformanceCounterResultKHR");
+            assert_eq!(m.members.len(), 6);
         });
     }
 }
@@ -877,7 +923,7 @@ mod test_enum_value {
                 }
                 _ => panic!("wrong type"),
             }
-            
+
         });
     }
 
@@ -893,7 +939,7 @@ mod test_enum_value {
                 }
                 _ => panic!("wrong type"),
             }
-            
+
         });
     }
 
@@ -909,7 +955,7 @@ mod test_enum_value {
                 }
                 _ => panic!("wrong type"),
             }
-            
+
         });
     }
 }
@@ -982,6 +1028,7 @@ pub struct Callbacks<'doc> {
     on_enum_alias:         Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
     // on_function_pointer:   Option<Box<dyn FnMut(FunctionPointer<'doc>) + 'doc>>,
     on_struct:             Option<Box<dyn FnMut(Struct<'doc>) + 'doc>>,
+    on_union:              Option<Box<dyn FnMut(Union<'doc>) + 'doc>>,
     on_enum:               Option<Box<dyn FnMut(Enum<'doc>) + 'doc>>,
 }
 
@@ -1063,6 +1110,13 @@ impl<'doc> Callbacks<'doc> {
         }
     }
 
+    fn on_union(&mut self, b: Union<'doc>) {
+        match &mut self.on_union {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
+
     fn on_enum(&mut self, b: Enum<'doc>) {
         match &mut self.on_enum {
             Some(cb) => cb(b),
@@ -1092,6 +1146,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_enum_alias:         None,
                 // on_function_pointer:   None,
                 on_struct:             None,
+                on_union:              None,
                 on_enum:               None,
             }
         }
@@ -1182,6 +1237,14 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         F: FnMut(Struct<'doc>) + 'doc
     {
         self.callbacks.on_struct = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_union<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Union<'doc>) + 'doc
+    {
+        self.callbacks.on_union = Some(Box::new(f));
         self
     }
 
@@ -1393,7 +1456,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         Ok(())
     }
 
-    fn parse_union(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_union(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        self.callbacks.on_union(Union::try_from(xml)?);
         Ok(())
     }
 
@@ -1412,3 +1476,5 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         Ok(())
     }
 }
+
+// FIXME all of the ctors should check that the thing they were passed was actually the right tag
