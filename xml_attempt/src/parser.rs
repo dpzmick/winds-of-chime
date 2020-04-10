@@ -16,7 +16,6 @@ mod test {
         where F: FnOnce(roxml::Node<'_, 'a>)
     {
         let xml = roxml::Document::parse(xml).expect("bad text xml");
-        println!("xml: {:?}", xml);
         f(xml.root_element())
     }
 }
@@ -824,6 +823,150 @@ mod struct_test {
     }
 }
 
+#[derive(Debug)]
+pub enum EnumMember<'doc> {
+    BitPos(&'doc str, usize),
+    Value(&'doc str,  &'doc str),
+
+    /// name, basetype
+    Alias(&'doc str,  &'doc str),
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for EnumMember<'doc> {
+    type Error = ParserError;
+
+    fn try_from(node: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        let name = node.attribute("name").ok_or(String::from("no name found in <enum> value"))?;
+
+        let value  = node.attribute("value");
+        let bitpos = node.attribute("bitpos");
+        let alias  = node.attribute("alias");
+
+        match (value, bitpos, alias) {
+            (Some(value), None, None) => {
+                Ok(Self::Value(name, value))
+            },
+            (None, Some(bitpos), None) => {
+                let bp = bitpos.parse::<usize>().map_err(|e| {
+                    format!("malformed bitpos, got '{}'", bitpos)
+                })?;
+
+                Ok(Self::BitPos(name, bp))
+            },
+            (None, None, Some(alias)) => {
+                Ok(Self::Alias(name, alias))
+            },
+            _ => Err(String::from("expected only one of either value and bitpos, got both"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_enum_value {
+    use super::*;
+
+    #[test]
+    fn test_value() {
+        let xml = r#"<enum value="0x123" name="VK_ASD"/>"#;
+        test::xml_test(xml, |node| {
+            let m = EnumMember::try_from(node).expect("should not fail");
+            match m {
+                EnumMember::Value(name, value) => {
+                    assert_eq!(name, "VK_ASD");
+                    assert_eq!(value, "0x123");
+                }
+                _ => panic!("wrong type"),
+            }
+            
+        });
+    }
+
+    #[test]
+    fn test_bitpos() {
+        let xml = r#"<enum bitpos="4" name="VK_ASD"/>"#;
+        test::xml_test(xml, |node| {
+            let m = EnumMember::try_from(node).expect("should not fail");
+            match m {
+                EnumMember::BitPos(name, pos) => {
+                    assert_eq!(name, "VK_ASD");
+                    assert_eq!(pos, 4);
+                }
+                _ => panic!("wrong type"),
+            }
+            
+        });
+    }
+
+    #[test]
+    fn test_alias() {
+        let xml = r#"<enum name="VK_ASD" alias="VK_OTHER"/>"#;
+        test::xml_test(xml, |node| {
+            let m = EnumMember::try_from(node).expect("should not fail");
+            match m {
+                EnumMember::Alias(name, alias_of) => {
+                    assert_eq!(name, "VK_ASD");
+                    assert_eq!(alias_of, "VK_OTHER");
+                }
+                _ => panic!("wrong type"),
+            }
+            
+        });
+    }
+}
+
+#[derive(Debug)]
+pub enum EnumType {
+    APIConstants, // special case
+    Enum,
+    BitMask,
+}
+
+#[derive(Debug)]
+pub struct Enum<'doc> {
+    pub name:      &'doc str,
+    pub enum_type: EnumType,
+    pub members:   Vec<EnumMember<'doc>>,
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Enum<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        let name = xml.attribute("name").ok_or(
+            String::from("expected name attribute on enums tag"))?;
+
+        let enum_type = {
+            if name == "API Constants" { // special case
+                EnumType::APIConstants
+            }
+            else {
+                let typ = xml.attribute("type").ok_or(
+                    String::from("Missing attribute type from enums tag"))?;
+
+                match typ {
+                    "enum" => Ok(EnumType::Enum),
+                    "bitmask" => Ok(EnumType::BitMask),
+                    _ => Err(format!("expected bitmask or enum, got '{}'", typ)),
+                }?
+            }
+        };
+
+        let mut members = Vec::new();
+        for member in xml.children() {
+            if member.node_type() != roxml::NodeType::Element { continue; } // some text nodes
+            if member.tag_name().name() == "comment" { continue; } // some comments too
+            if member.tag_name().name() == "unused" { continue; } // UGH
+            members.push(EnumMember::try_from(member)?);
+        }
+
+        Ok(Enum {
+            name,
+            enum_type,
+            members,
+        })
+    }
+}
+
 // Dynamically dispatch all of these callbacks so that the user
 // doesn't have to specify an explict type for the callbacks that they
 // are not interested in (we can't know the type statically).
@@ -839,6 +982,7 @@ pub struct Callbacks<'doc> {
     on_enum_alias:         Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
     // on_function_pointer:   Option<Box<dyn FnMut(FunctionPointer<'doc>) + 'doc>>,
     on_struct:             Option<Box<dyn FnMut(Struct<'doc>) + 'doc>>,
+    on_enum:               Option<Box<dyn FnMut(Enum<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -918,6 +1062,13 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_enum(&mut self, b: Enum<'doc>) {
+        match &mut self.on_enum {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -941,6 +1092,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_enum_alias:         None,
                 // on_function_pointer:   None,
                 on_struct:             None,
+                on_enum:               None,
             }
         }
     }
@@ -1030,6 +1182,14 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         F: FnMut(Struct<'doc>) + 'doc
     {
         self.callbacks.on_struct = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_enum<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Enum<'doc>) + 'doc
+    {
+        self.callbacks.on_enum = Some(Box::new(f));
         self
     }
 
@@ -1237,28 +1397,9 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         Ok(())
     }
 
-    fn parse_enums(&mut self, node: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        // assumes that the appropriate typedefs have already been seen
-        let name = match node.attribute("name") {
-            Some(nm) => Ok(nm),
-            None => Err(String::from("<enums> tag is missing name attribute")),
-        }?;
-
-        if name == "API Constants" {
-            // FIXME special case, probably want to expose these thought
-            return Ok(());
-        }
-
-        let enum_type = match node.attribute("type") {
-            Some(et) => Ok(et),
-            None => Err(format!("<enums> tag for name='{}' is missing type attribute", name)),
-        }?;
-
-        match enum_type {
-            "enum"    => self.parse_enum(node),
-            "bitmask" => self.parse_bitmask(node, name),
-            _ => Err(format!("<enums> tag had unknown type='{}'", enum_type)),
-        }
+    fn parse_enums(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        self.callbacks.on_enum(Enum::try_from(xml)?);
+        Ok(())
     }
 
     fn parse_enum(&mut self, node: roxml::Node<'doc, '_>) -> Result<(), ParserError> {

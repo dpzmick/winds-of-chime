@@ -30,6 +30,7 @@ fn main() {
         .on_enum_definition(print)
         // .on_function_pointer(print)
         .on_struct(print)
+        .on_enum(print)
         .parse_document()
         .expect("parser");
 }
