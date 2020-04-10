@@ -24,35 +24,6 @@ fn expect_attr<'a>(node: roxml::Node<'a, '_>, n: &str) -> Result<&'a str, Parser
     node.attribute(n).ok_or(String::from(n))
 }
 
-// unhappy with having to allocate here
-fn squash<'doc>(node: roxml::Node<'doc, '_>) -> String {
-    // squash to string, skipping comments
-    let mut squash = String::new();
-    for child in node.children() {
-        match child.node_type() {
-            roxml::NodeType::Element => {
-                if child.tag_name().name() == "comment" { continue; }
-                for part in child.descendants() {
-                    if part.node_type() != roxml::NodeType::Text { continue; }
-                    squash.push_str(
-                        &(String::from(" ") + part.text().unwrap())
-                    );
-                }
-            },
-            roxml::NodeType::Text => {
-                squash.push_str(
-                    &(String::from(" ") + child.text().unwrap())
-                );
-            },
-            _ => panic!("unexpected node type"), // FIXME
-        }
-
-    }
-
-    squash.push(';');
-    squash
-}
-
 fn get_bool_attr<'doc>(node: roxml::Node<'doc, '_>, nm: &str) -> Result<bool, ParserError> {
     if let Some(v) = node.attribute(nm) {
         match v {
@@ -64,6 +35,201 @@ fn get_bool_attr<'doc>(node: roxml::Node<'doc, '_>, nm: &str) -> Result<bool, Pa
     else {
         Ok(false)
     }
+}
+
+/// get type and name for a command arg or struct/union member
+fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
+    -> Result<(Type<'doc>, &'doc str), ParserError>
+{
+    // using libclang was pretty hard, doing this manually seems
+    // feasible, there aren't too many cases
+    let mut children = xml.children();
+
+    let mut is_mutable = true;
+
+    // if the first node is a text node, look for the test "const"
+    // else the node should be a tag <type>
+    let mut node = children.next().ok_or(String::from("Expected child"))?;
+    if node.node_type() == roxml::NodeType::Text {
+        let txt = node.text().unwrap();
+        match txt {
+            "const "        => is_mutable = false,
+            "struct "       => (), // ignored
+            "const struct " => is_mutable = false,
+            _               => return Err(format!("expected 'const ' got {}", txt)),
+        }
+
+        node = children.next().ok_or(String::from("Expected child"))?;
+    }
+
+    // whatever is at `node` should be <type> now
+    if node.node_type() != roxml::NodeType::Element {
+        return Err(format!("Expected element, got {:?}", node.node_type()));
+    }
+
+    if node.tag_name().name() != "type" {
+        return Err(format!("Expected <type>, got <{}>", node.tag_name().name()));
+    }
+
+    let type_name = {
+        let mut children = node.children();
+        let n = children.next().ok_or(String::from("Expected children"))?;
+        n.text().ok_or(String::from("Expected text"))
+    }?;
+
+    let mut typ = Type {
+        mutable: is_mutable,
+        ty: Box::new(Types::Base(type_name)),
+    };
+    is_mutable = true;
+
+    node = children.next().ok_or(String::from("Expected childre"))?;
+
+    let mut pending = false;
+    if node.node_type() == roxml::NodeType::Text {
+        let pointer_str = node.text().ok_or(
+            String::from("Expected text node in pointer section"))?;
+
+        let pointer_str = pointer_str.as_bytes();
+
+        let mut i = 0;
+        loop {
+            if i >= pointer_str.len() { break; }
+
+            let c = pointer_str[i];
+            if c == b'*' {
+                if pending {
+                    typ = Type {
+                        mutable: is_mutable,
+                        ty: Box::new(Types::Pointer(typ)),
+                    };
+                }
+
+                pending = true;
+                is_mutable = true;
+            }
+            else if c == b' ' {
+                // pass
+            }
+            else if c == b'c' {
+                if i + "onst".len() > pointer_str.len() - i { // FIXME check idx
+                    return Err(
+                        String::from("Expected const in pointer str, but there isn't enough string left"));
+                }
+
+                let sl = &pointer_str[(i+1)..("onst".len()+i+1)];
+                if "onst".as_bytes() != sl {
+                    return Err(
+                        format!("Expected const in pointer str, but didn't find onst, found {:?} instead",
+                                std::str::from_utf8(sl)));
+                }
+
+
+                // got a const, skip ahead
+                i += "onst".len();
+                is_mutable = false;
+            }
+            else {
+                return Err(format!("Unexpected character in pointer section {}", c as char));
+            }
+
+            i += 1;
+        }
+
+        if pending {
+            typ = Type {
+                mutable: is_mutable,
+                ty: Box::new(Types::Pointer(typ)),
+            };
+        }
+
+        node = children.next().ok_or(String::from("Expected children"))?;
+    }
+
+    // finally, an element node with the name
+    if node.node_type() != roxml::NodeType::Element {
+        return Err(format!("Expected an element, got {:?}", node.node_type()));
+    }
+
+    if node.tag_name().name() != "name" {
+        return Err(format!("Expected <name> element, got <{:?}>", node.tag_name().name()));
+    }
+
+    let name = {
+        let mut children = node.children();
+        let n = children.next().ok_or(String::from("Expected children"))?;
+        n.text().ok_or(format!("Expected text, got {:?}", n.node_type()))
+    }?;
+
+    let mut maybe_node = children.next();
+
+    // if we have another node, check if the node is an array
+    if maybe_node.is_some() && maybe_node.unwrap().node_type() != roxml::NodeType::Element {
+        let open = maybe_node.unwrap().text().unwrap();
+        if open.len() == 1 {
+            if open != "[" {
+                return Err(format!("Expected [ got '{}'", open));
+            }
+
+            // could also be something like [2]
+
+            // next is the array size
+            let sz = children.next().ok_or(String::from("Expected additional children inside of []"))?;
+            let sz = sz.text().ok_or(format!("Expected text"))?; // actually something like <enum>ASDAS</enum>.
+
+            // finally, close the bracket
+            let close = children.next().ok_or(String::from("Expected additional children (closing ])"))?;
+            let close = close.text().ok_or(String::from("Expected text for close bracket"))?;
+            if close != "]" {
+                return Err(format!("Expected ] got '{}'", open));
+            }
+
+            typ = Type {
+                mutable: true, // FIXME ??? pretty sure this is right
+                ty: Box::new(Types::BoundedArrayStr(sz, typ))
+            };
+        }
+        else {
+            if !open.starts_with("[") || !open.ends_with("]") {
+                return Err(format!("expected [...], got '{}'", open));
+            }
+
+            // the middle must be an int
+            let sl = open.get(1..(open.len()-1)).unwrap();
+            let sz = sl.parse::<usize>().map_err(|e| {
+                format!("failed to parse int inside of [], got '{}', error={:?}", sl, e)
+            })?;
+
+            typ = Type {
+                mutable: true, // FIXME ??? pretty sure this is right
+                ty: Box::new(Types::BoundedArrayInt(sz, typ))
+            };
+        }
+
+        maybe_node = children.next();
+    }
+
+    // only thing this could be is a comment
+    if maybe_node.is_some() {
+        if maybe_node.unwrap().node_type() == roxml::NodeType::Element {
+            if maybe_node.unwrap().tag_name().name() != "comment" {
+                return Err(
+                    format!("Expected <comment>, got <{:?}>",
+                            maybe_node.unwrap().tag_name().name()));
+            }
+        }
+
+        maybe_node = children.next();
+    }
+
+    // shouldn't be any more
+    if maybe_node.is_some() {
+        return Err(String::from("Found more children when none where expected"));
+    }
+
+    return Ok(
+        (typ, name)
+    );
 }
 
 #[derive(Debug)]
@@ -181,7 +347,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Typedef<'doc> {
         }?;
 
         match children.next() {
-            Some(text) => Ok(()),
+            Some(_) => Ok(()),
             None => Err(String::from("Missing expected text node from typedef")),
         }?;
 
@@ -407,193 +573,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Member<'doc> {
     type Error = ParserError;
 
     fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        // using libclang was pretty hard, doing this manually seems
-        // feasible, there aren't too many cases
-        let mut children = xml.children();
-
-        let mut is_mutable = true;
-
-        // if the first node is a text node, look for the test "const"
-        // else the node should be a tag <type>
-        let mut node = children.next().ok_or(String::from("Expected child"))?;
-        if node.node_type() == roxml::NodeType::Text {
-            let txt = node.text().unwrap();
-            match txt {
-                "const "        => is_mutable = false,
-                "struct "       => (), // ignored
-                "const struct " => is_mutable = false,
-                _               => return Err(format!("expected 'const ' got {}", txt)),
-            }
-
-            node = children.next().ok_or(String::from("Expected child"))?;
-        }
-
-        // whatever is at `node` should be <type> now
-        if node.node_type() != roxml::NodeType::Element {
-            return Err(format!("Expected element, got {:?}", node.node_type()));
-        }
-
-        if node.tag_name().name() != "type" {
-            return Err(format!("Expected <type>, got <{}>", node.tag_name().name()));
-        }
-
-        let type_name = {
-            let mut children = node.children();
-            let n = children.next().ok_or(String::from("Expected children"))?;
-            n.text().ok_or(String::from("Expected text"))
-        }?;
-
-        let mut typ = Type {
-            mutable: is_mutable,
-            ty: Box::new(Types::Base(type_name)),
-        };
-        is_mutable = true;
-
-        node = children.next().ok_or(String::from("Expected childre"))?;
-
-        let mut pending = false;
-        if node.node_type() == roxml::NodeType::Text {
-            let pointer_str = node.text().ok_or(
-                String::from("Expected text node in pointer section"))?;
-
-            let pointer_str = pointer_str.as_bytes();
-
-            let mut i = 0;
-            loop {
-                if i >= pointer_str.len() { break; }
-
-                let mut c = pointer_str[i];
-
-                if c == b'*' {
-                    if pending {
-                        typ = Type {
-                            mutable: is_mutable,
-                            ty: Box::new(Types::Pointer(typ)),
-                        };
-                    }
-
-                    pending = true;
-                    is_mutable = true;
-                }
-                else if c == b' ' {
-                    // pass
-                }
-                else if c == b'c' {
-                    if i + "onst".len() > pointer_str.len() - i { // FIXME check idx
-                        return Err(
-                            String::from("Expected const in pointer str, but there isn't enough string left"));
-                    }
-
-                    let sl = &pointer_str[(i+1)..("onst".len()+i+1)];
-                    if "onst".as_bytes() != sl {
-                        return Err(
-                            format!("Expected const in pointer str, but didn't find onst, found {:?} instead",
-                                    std::str::from_utf8(sl)));
-                    }
-
-
-                    // got a const, skip ahead
-                    i += "onst".len();
-                    is_mutable = false;
-                }
-                else {
-                    return Err(format!("Unexpected character in pointer section {}", c as char));
-                }
-
-                i += 1;
-            }
-
-            if pending {
-                typ = Type {
-                    mutable: is_mutable,
-                    ty: Box::new(Types::Pointer(typ)),
-                };
-            }
-
-            node = children.next().ok_or(String::from("Expected children"))?;
-        }
-
-        // finally, an element node with the name
-        if node.node_type() != roxml::NodeType::Element {
-            return Err(format!("Expected an element, got {:?}", node.node_type()));
-        }
-
-        if node.tag_name().name() != "name" {
-            return Err(format!("Expected <name> element, got <{:?}>", node.tag_name().name()));
-        }
-
-        let name = {
-            let mut children = node.children();
-            let n = children.next().ok_or(String::from("Expected children"))?;
-            n.text().ok_or(format!("Expected text, got {:?}", n.node_type()))
-        }?;
-
-        let mut maybe_node = children.next();
-
-        // if we have another node, check if the node is an array
-        if maybe_node.is_some() && maybe_node.unwrap().node_type() != roxml::NodeType::Element {
-            let open = maybe_node.unwrap().text().unwrap();
-            if open.len() == 1 {
-                if open != "[" {
-                    return Err(format!("Expected [ got '{}'", open));
-                }
-
-                // could also be something like [2]
-
-                // next is the array size
-                let sz = children.next().ok_or(String::from("Expected additional children inside of []"))?;
-                let sz = sz.text().ok_or(format!("Expected text"))?; // actually something like <enum>ASDAS</enum>.
-
-                // finally, close the bracket
-                let close = children.next().ok_or(String::from("Expected additional children (closing ])"))?;
-                let close = close.text().ok_or(String::from("Expected text for close bracket"))?;
-                if close != "]" {
-                    return Err(format!("Expected ] got '{}'", open));
-                }
-
-                typ = Type {
-                    mutable: true, // FIXME ??? pretty sure this is right
-                    ty: Box::new(Types::BoundedArrayStr(sz, typ))
-                };
-            }
-            else {
-                if !open.starts_with("[") || !open.ends_with("]") {
-                    return Err(format!("expected [...], got '{}'", open));
-                }
-
-                // the middle must be an int
-                let sl = open.get(1..(open.len()-1)).unwrap();
-                let sz = sl.parse::<usize>().map_err(|e| {
-                    format!("failed to parse int inside of [], got '{}', error={:?}", sl, e)
-                })?;
-
-                typ = Type {
-                    mutable: true, // FIXME ??? pretty sure this is right
-                    ty: Box::new(Types::BoundedArrayInt(sz, typ))
-                };
-            }
-
-            maybe_node = children.next();
-        }
-
-        // only thing this could be is a comment
-        if maybe_node.is_some() {
-            if maybe_node.unwrap().node_type() == roxml::NodeType::Element {
-                if maybe_node.unwrap().tag_name().name() != "comment" {
-                    return Err(
-                        format!("Expected <comment>, got <{:?}>",
-                                maybe_node.unwrap().tag_name().name()));
-                }
-            }
-
-            maybe_node = children.next();
-        }
-
-        // shouldn't be any more
-        if maybe_node.is_some() {
-            return Err(String::from("Found more children when none where expected"));
-        }
-
+        let (typ, name) = get_type_and_name(xml)?;
         Ok(Self {
             name:           name,
             typ:            typ,
@@ -875,7 +855,7 @@ pub enum EnumMember<'doc> {
     Value(&'doc str,  &'doc str),
 
     /// name, basetype
-    Alias(&'doc str,  &'doc str),
+    Alias(&'doc str,  &'doc str),   // FIXME use Alias type here
 }
 
 impl<'doc> TryFrom<roxml::Node<'doc, '_>> for EnumMember<'doc> {
@@ -893,7 +873,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for EnumMember<'doc> {
                 Ok(Self::Value(name, value))
             },
             (None, Some(bitpos), None) => {
-                let bp = bitpos.parse::<usize>().map_err(|e| {
+                let bp = bitpos.parse::<usize>().map_err(|_| {
                     format!("malformed bitpos, got '{}'", bitpos)
                 })?;
 
@@ -1013,6 +993,39 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Enum<'doc> {
     }
 }
 
+#[derive(Debug)]
+pub struct CommandProto<'doc> {
+    pub typ:  Type<'doc>,
+    pub name: &'doc str,
+}
+
+#[derive(Debug)]
+pub struct CommandParam<'doc> {
+    pub typ:        Type<'doc>,
+    pub name:       &'doc str,
+    pub optional:   Option<&'doc str>,
+    pub externsync: Option<&'doc str>,
+    pub len:        Option<&'doc str>,
+}
+
+// FIXME what is implicitexternsyncparam
+// I'm skipping it, since it doesn't look like there's much useful I
+// can do in an automated fashion with it
+
+#[derive(Debug)]
+pub struct Command<'doc> {
+    /// raw value in XML, comma separated, but we don't separate to
+    /// save Vec the allocation if the field isn't used by user
+    pub successcodes:   Option<&'doc str>,
+    pub errorcodes:     Option<&'doc str>,
+    pub proto:          CommandProto<'doc>,
+    pub params:         Vec<CommandParam<'doc>>,
+    pub queues:         Option<&'doc str>,
+    pub renderpass:     Option<&'doc str>,
+    pub cmdbufferlevel: Option<&'doc str>,
+    pub pipeline:       Option<&'doc str>,
+}
+
 // Dynamically dispatch all of these callbacks so that the user
 // doesn't have to specify an explict type for the callbacks that they
 // are not interested in (we can't know the type statically).
@@ -1030,6 +1043,8 @@ pub struct Callbacks<'doc> {
     on_struct:             Option<Box<dyn FnMut(Struct<'doc>) + 'doc>>,
     on_union:              Option<Box<dyn FnMut(Union<'doc>) + 'doc>>,
     on_enum:               Option<Box<dyn FnMut(Enum<'doc>) + 'doc>>,
+    on_command:            Option<Box<dyn FnMut(Command<'doc>) + 'doc>>,
+    on_command_alias:      Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -1123,6 +1138,20 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_command(&mut self, b: Command<'doc>) {
+        match &mut self.on_command {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
+
+    fn on_command_alias(&mut self, b: Alias<'doc>) {
+        match &mut self.on_command_alias {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -1148,6 +1177,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_struct:             None,
                 on_union:              None,
                 on_enum:               None,
+                on_command:            None,
+                on_command_alias:      None,
             }
         }
     }
@@ -1256,6 +1287,22 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         self
     }
 
+    pub fn on_command<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Command<'doc>) + 'doc
+    {
+        self.callbacks.on_command = Some(Box::new(f));
+        self
+    }
+
+    pub fn on_command_alias<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Alias<'doc>) + 'doc
+    {
+        self.callbacks.on_command_alias = Some(Box::new(f));
+        self
+    }
+
     pub fn parse_document(mut self) -> Result<(), ParserError> {
         let registry = self.document.root_element();
         for node in registry.children() {
@@ -1267,6 +1314,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 "tags"      => self.parse_tags(node)?,
                 "types"     => self.parse_types(node)?,
                 "enums"     => self.parse_enums(node)?, // many of these
+                "commands"  => self.parse_commands(node)?,
                 _           => continue,
             }
         }
@@ -1423,30 +1471,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         }
     }
 
-    fn parse_funcpointer(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        let s = squash(xml_type);
-        // let t = Type::from_c_decl(&self.clang_ctx, &s); // FIXME errors, also this name is wrong
-
-        // go find the name, the name we got from clang isn't right
-        // FIXME is the rest of the stuff we got from clang right??
-        let mut children = xml_type.children();
-        match children.next() {
-            Some(_) => Ok(()),
-            None    => Err(String::from("Expected children")),
-        }?;
-
-        let name = match children.next() {
-            Some(name_node) => match name_node.text() {
-                Some(name) => Ok(name),
-                None       => Err(String::from("Expected text inside of <name></name>")),
-            },
-            None => Err(String::from("Expected more children")),
-        }?;
-
-        // self.callbacks.on_function_pointer(FunctionPointer {
-        //     name: name,
-        //     typ: t.0,
-        // });
+    fn parse_funcpointer(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        // FIXME implement
         Ok(())
     }
 
@@ -1466,15 +1492,10 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         Ok(())
     }
 
-    fn parse_enum(&mut self, node: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        Ok(())
-    }
-
-    fn parse_bitmask(&mut self, node: roxml::Node<'doc, '_>, enum_name: &'doc str)
-        -> Result<(), ParserError>
-    {
+    fn parse_commands(&mut self, _xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
         Ok(())
     }
 }
 
 // FIXME all of the ctors should check that the thing they were passed was actually the right tag
+// FIXME test the actual parser, make sure it delivers the right callbacks (this should be done as a regression test maybe)
