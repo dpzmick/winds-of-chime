@@ -739,7 +739,7 @@ mod struct_member_test {
                     mutable: true,
                     ty: Box::new(Types::Base("uint32_t"))
 
-                        
+
                 }))
             });
         });
@@ -757,7 +757,7 @@ mod struct_member_test {
                     mutable: true,
                     ty: Box::new(Types::Base("uint32_t"))
 
-                        
+
                 }))
             });
         });
@@ -784,7 +784,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
             if member.node_type() == roxml::NodeType::Text { continue; }
             if member.node_type() == roxml::NodeType::Comment { continue; }
             if member.tag_name().name() == "comment" { continue; }
-            println!("struct {} member {:?}", name, member);
+            // println!("struct {} member {:?}", name, member);
             members.push( StructMember::try_from(member)? );
         }
 
@@ -801,7 +801,27 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
 mod struct_test {
     use super::*;
 
-    // FIXME write these
+    // don't test members
+    #[test]
+    fn test_struct() {
+        let xml = r#"<type category="struct" name="VkShaderStatisticsInfoAMD" returnedonly="true">
+    <member><type>VkShaderStageFlags</type> <name>shaderStageMask</name></member>
+    <member><type>VkShaderResourceUsageAMD</type> <name>resourceUsage</name></member>
+    <member><type>uint32_t</type> <name>numPhysicalVgprs</name></member>
+    <member><type>uint32_t</type> <name>numPhysicalSgprs</name></member>
+    <member><type>uint32_t</type> <name>numAvailableVgprs</name></member>
+    <member><type>uint32_t</type> <name>numAvailableSgprs</name></member>
+    <member><type>uint32_t</type> <name>computeWorkGroupSize</name>[3]</member>
+</type>
+"#;
+        test::xml_test(xml, |node| {
+            let m = Struct::try_from(node).expect("should not fail");
+            assert_eq!(m.name, "VkShaderStatisticsInfoAMD");
+            assert_eq!(m.returnedonly, true);
+            assert_eq!(m.structextends, None);
+            assert_eq!(m.members.len(), 7);
+        });
+    }
 }
 
 // Dynamically dispatch all of these callbacks so that the user
