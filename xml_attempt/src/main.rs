@@ -32,7 +32,7 @@ fn main() {
         .on_handle(print)
         .on_handle_alias(print)
         .on_enum_definition(print)
-        .on_function_pointer(print)
+        // .on_function_pointer(print)
         .parse_document()
         .expect("parser");
 }
