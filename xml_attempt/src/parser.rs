@@ -754,7 +754,7 @@ mod struct_member_test {
 }
 
 #[derive(Debug)]
-struct Struct<'doc> {
+pub struct Struct<'doc> {
     pub name:          &'doc str,
     pub structextends: Option<&'doc str>,
     pub returnedonly:  bool,
@@ -785,6 +785,8 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
 #[cfg(test)]
 mod struct_test {
     use super::*;
+
+    // FIXME write these
 }
 
 // Dynamically dispatch all of these callbacks so that the user
@@ -1210,7 +1212,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         }?;
 
         if name == "API Constants" {
-            // FIXME special case
+            // FIXME special case, probably want to expose these thought
             return Ok(());
         }
 

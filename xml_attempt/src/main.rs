@@ -33,6 +33,7 @@ fn main() {
         .on_handle_alias(print)
         .on_enum_definition(print)
         // .on_function_pointer(print)
+        .on_struct(print)
         .parse_document()
         .expect("parser");
 }
