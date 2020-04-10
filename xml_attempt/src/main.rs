@@ -1,8 +1,4 @@
 extern crate roxmltree;
-extern crate clang;
-
-#[cfg(test)]
-extern crate lazy_static;
 
 mod error;
 mod helpers;
