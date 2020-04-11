@@ -49,7 +49,7 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
 
     // if the first node is a text node, look for the test "const"
     // else the node should be a tag <type>
-    let mut node = children.next().ok_or(String::from("Expected child"))?;
+    let mut node = children.next().ok_or(String::from("Expected child when getting type/name"))?;
     if node.node_type() == roxml::NodeType::Text {
         let txt = node.text().unwrap();
         match txt {
@@ -999,6 +999,17 @@ pub struct CommandProto<'doc> {
     pub name: &'doc str,
 }
 
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for CommandProto<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        // we don't need all of the features of this helper, but
+        // probably fine to use it here
+        let (typ, name) = get_type_and_name(xml)?;
+        Ok(Self { typ, name })
+    }
+}
+
 #[derive(Debug)]
 pub struct CommandParam<'doc> {
     pub typ:        Type<'doc>,
@@ -1008,22 +1019,71 @@ pub struct CommandParam<'doc> {
     pub len:        Option<&'doc str>,
 }
 
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for CommandParam<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        let (typ, name) = get_type_and_name(xml)?;
+        Ok(Self {
+            name:           name,
+            typ:            typ,
+            optional:       xml.attribute("optional"),
+            externsync:     xml.attribute("externsync"),
+            len:            xml.attribute("len"),
+        })
+    }
+}
+
 // FIXME what is implicitexternsyncparam
 // I'm skipping it, since it doesn't look like there's much useful I
 // can do in an automated fashion with it
 
 #[derive(Debug)]
 pub struct Command<'doc> {
-    /// raw value in XML, comma separated, but we don't separate to
-    /// save Vec the allocation if the field isn't used by user
-    pub successcodes:   Option<&'doc str>,
-    pub errorcodes:     Option<&'doc str>,
     pub proto:          CommandProto<'doc>,
     pub params:         Vec<CommandParam<'doc>>,
+    pub successcodes:   Option<&'doc str>,
+    pub errorcodes:     Option<&'doc str>,
     pub queues:         Option<&'doc str>,
     pub renderpass:     Option<&'doc str>,
     pub cmdbufferlevel: Option<&'doc str>,
     pub pipeline:       Option<&'doc str>,
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Command<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        // have to fine the proto node (should be first non-text child)
+        let mut children = xml.children();
+        let proto_node = loop {
+            let child = children.next().ok_or(
+                String::from("Expected additional children while looking for proto node"))?;
+
+            if child.node_type() != roxml::NodeType::Element { continue; }
+            break child;
+        };
+
+        let proto = CommandProto::try_from(proto_node)?;
+
+        let mut params = Vec::new();
+        for param in children { // the rest
+            if param.node_type() != roxml::NodeType::Element { continue; }
+            if param.tag_name().name() != "param" { continue; } // skip implictexternsyncparam
+            params.push(CommandParam::try_from(param)?);
+        }
+
+        Ok(Self {
+            proto:          proto,
+            params:         params,
+            successcodes:   xml.attribute("successcodes"),
+            errorcodes:     xml.attribute("errorcodes"),
+            queues:         xml.attribute("queues"),
+            renderpass:     xml.attribute("renderpass"),
+            cmdbufferlevel: xml.attribute("cmdbufferlevel"),
+            pipeline:       xml.attribute("pipeline"),
+        })
+    }
 }
 
 // Dynamically dispatch all of these callbacks so that the user
@@ -1492,7 +1552,29 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         Ok(())
     }
 
-    fn parse_commands(&mut self, _xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_commands(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        for command in xml.children() {
+            if command.node_type() != roxml::NodeType::Element { continue; }
+            match command.attribute("name") {
+                Some(name) => {
+                    match command.attribute("alias") {
+                        Some(alias) => {
+                            self.callbacks.on_command_alias(Alias {
+                                basetype:  alias,  // again, confusing. is this right?
+                                aliastype: name,
+                            });
+                            Ok(())
+                        },
+                        None => Err(String::from("Expected 'name' attribute for command alias"))
+                    }
+                },
+                None => {
+                    self.callbacks.on_command(Command::try_from(command)?);
+                    Ok(())
+                }
+            }?;
+        }
+
         Ok(())
     }
 }
