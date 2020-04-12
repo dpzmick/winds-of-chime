@@ -526,14 +526,7 @@ pub struct EnumDefinition<'doc> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct FunctionPointerType<'doc> {
-    pub return_type:    Type<'doc>,
-    pub argument_types: Vec<Type<'doc>>,
-}
-
-#[derive(Debug, PartialEq)]
 pub enum Types<'doc> {
-    FunctionPointer(FunctionPointerType<'doc>),
     Pointer(Type<'doc>),
     Base(&'doc str),
 
@@ -550,11 +543,282 @@ pub struct Type<'doc> {
     pub ty:      Box<Types<'doc>>,
 }
 
-// #[derive(Debug)]
-// pub struct FunctionPointer<'doc> {
-//     pub name: &'doc str,
-//     pub typ:  Type,
-// }
+// not a type because we didn't need function pointer types anywhere
+// else (they are always typedefed)
+#[derive(Debug)]
+pub struct FunctionPointer<'doc> {
+    pub name:           &'doc str,
+    pub return_type:    Type<'doc>,
+    pub arguments:      Vec<(&'doc str, Type<'doc>)>,
+}
+
+impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
+    type Error = ParserError;
+
+    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+        // typedef type[pointer]* (VKAPI_PTR *<name>...</name>)(
+        //   <type>xxxx</type>pointers   name,
+        //   ...
+        // )
+
+        let mut children = xml.children();
+
+        // first child should be text
+        let return_type = {
+            let child = children.next().ok_or(
+                String::from("Expected children when parsing funcptr return_type"))?;
+
+            if child.node_type() != roxml::NodeType::Text {
+                return Err(String::from("Expected return type to be Text node"));
+            }
+
+            let spl = child.text().unwrap().split_whitespace().collect::<Vec<_>>();
+            if spl.len() != 4 {
+                return Err(format!("Expected the lenght of split section to be 4, got {}", spl.len()));
+            }
+
+            if spl[0] != "typedef" {
+                return Err(format!("Expected the string 'typedef', got '{}'", spl[0]));
+            }
+
+            if spl[2] != "(VKAPI_PTR" {
+                return Err(format!("Expected the string '(VKAPI_PTR', got '{}'", spl[2]));
+            }
+
+            if spl[3] != "*" {
+                return Err(format!("Expected the string '*', got '{}'", spl[3]));
+            }
+
+            let ptrspl = spl[1].splitn(2, '*').collect::<Vec<_>>();
+            let ptr_cnt = if ptrspl.len() == 2 {
+                for ptr in ptrspl[1].chars() {
+                    if ptr != '*' {
+                        return Err(format!("Strange trailing section, contains a '{}', should only be '*", ptr));
+                    }
+                }
+                1 + ptrspl[1].len()
+            }
+            else {
+                0
+            };
+
+            // FIXME handle const?
+            // there don't seem to be any in the document
+            let mut typ = Type {
+                mutable: true,
+                ty:      Box::new(Types::Base(ptrspl[0])),
+            };
+
+            for _ in 0..ptr_cnt {
+                typ = Type {
+                    mutable: true,
+                    ty: Box::new(Types::Pointer(typ))
+                };
+            }
+
+            typ
+        };
+
+        let name = {
+            let child = children.next().ok_or(
+                String::from("Expected more children (looking for <name>) while parsing funcptr"))?;
+
+            if child.node_type() != roxml::NodeType::Element {
+                return Err(format!("Expected <name> node with node_type == Element, got {:?}", child.node_type()));
+            }
+
+            if child.tag_name().name() != "name" {
+                return Err(format!("Expected <name> node, got {}", child.tag_name().name()));
+            }
+
+            // the contents of this node are the name, should be exactly one elemement
+            let grandchildren = child.children().collect::<Vec<_>>();
+            if grandchildren.len() != 1 {
+                return Err(format!("Too many children of funcpointer <name> node, got {}", grandchildren.len()));
+            }
+
+            if grandchildren[0].node_type() != roxml::NodeType::Text {
+                return Err(format!("Expected <name> grandchild node with node_type == Element, got {:?}", grandchildren[0].node_type()));
+            }
+
+            grandchildren[0].text().unwrap()
+        };
+
+        // ')(' literal
+        let literal = children.next().ok_or(String::from("expected Text node for )( while parsing funcptr"))?;
+        let mut literal = literal.text().ok_or(String::from("Expected literal to be Text"))?.trim_end();
+        if literal != ")(" {
+            return Err(format!("Expected literal ')(\n', got {}", literal));
+        }
+
+        // iterate in pairs of <type>xx</type>(whitespace or pointers)name,
+        // until we hit a pair that ends in ');' instead of ','
+        let mut arguments = Vec::new();
+
+        loop {
+            let typ  = children.next().ok_or("Expected <type> child while parsing funcptr arguments")?;
+            let txt  = children.next().ok_or("Expected text child while parsing funcptr arguments")?;
+
+            if typ.node_type() != roxml::NodeType::Element {
+                return Err(format!("typ of argument should be Element, got {:?}", typ.node_type()))
+            }
+
+            if txt.node_type() != roxml::NodeType::Text {
+                return Err(format!("txt of argument should be Text , got {:?}", txt.node_type()))
+            }
+
+            let typ = {
+                let grandchildren = typ.children().collect::<Vec<_>>();
+                if grandchildren.len() != 1 {
+                    return Err(format!("Wrong len for funcptr arg grandchildren, got {}", grandchildren.len()));
+                }
+
+                if grandchildren[0].node_type() != roxml::NodeType::Text {
+                    return Err(format!("Wrong node_type for funcptr arg grandchildren, got {:?}", grandchildren[0].node_type()));
+                }
+
+                grandchildren[0].text().unwrap()
+            };
+
+            let txt = txt.text().unwrap();
+            let spl = txt.split_whitespace().collect::<Vec<_>>();
+
+            if spl.len() != 1 && spl.len() != 2 {
+                return Err(format!("txt split by whitespace had wrong len, got {}, txt was '{}'", spl.len(), txt));
+            }
+
+            let full_name = if spl.len() == 2 { spl[1] } else { spl[0] };
+            let mut typ = Type {
+                mutable: true,  // FIXME handle const?
+                ty:      Box::new(Types::Base(typ)),
+            };
+
+            if spl.len() == 2 {
+                for ptr in spl[0].chars() {
+                    if ptr != '*' {
+                        return Err(
+                            format!("Found non-'*' char in ptr section of funcptr arg, got '{}'", ptr));
+                    }
+
+                    typ = Type {
+                        mutable: true,   // FIXME handle const?
+                        ty:      Box::new(Types::Pointer(typ))
+                    }
+                }
+            }
+
+            let name = full_name.trim_end_matches(|c| {
+                c == ',' || c == ')' || c == ';'
+            });
+
+            arguments.push( (name, typ) );
+
+            if full_name.ends_with(");") {
+                break;
+            }
+        }
+
+        Ok(Self {
+            name,
+            return_type,
+            arguments,
+        })
+    }
+}
+
+#[cfg(test)]
+mod test_function_pointer {
+    use super::*;
+
+    #[test]
+    fn test_without_pointers() {
+        let xml = r#"<type category="funcpointer">typedef void (VKAPI_PTR *<name>PFN_blah</name>)(
+  <type>uint32_t</type>  arg1,
+  <type>uint64_t</type>  arg2);</type>"#;
+
+        test::xml_test(xml, |node| {
+            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            assert_eq!(fptr.name, "PFN_blah");
+            assert_eq!(fptr.return_type, Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("void") )
+            });
+
+            assert_eq!(fptr.arguments.len(), 2);
+            assert_eq!(fptr.arguments[0], ("arg1", Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("uint32_t") )
+            }));
+
+            assert_eq!(fptr.arguments[1], ("arg2", Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("uint64_t") )
+            }));
+        });
+    }
+
+    #[test]
+    fn test_returned_pointer() {
+        let xml = r#"<type category="funcpointer">typedef void* (VKAPI_PTR *<name>PFN_blah</name>)(
+  <type>uint32_t</type>  arg1,
+  <type>uint64_t</type>  arg2);</type>"#;
+
+        test::xml_test(xml, |node| {
+            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            assert_eq!(fptr.name, "PFN_blah");
+            assert_eq!(fptr.return_type, Type {
+                mutable: true,
+                ty: Box::new( Types::Pointer( Type {
+                    mutable: true,
+                    ty: Box::new(Types::Base("void"))
+                        
+                }) )
+            });
+
+            assert_eq!(fptr.arguments.len(), 2);
+            assert_eq!(fptr.arguments[0], ("arg1", Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("uint32_t") )
+            }));
+
+            assert_eq!(fptr.arguments[1], ("arg2", Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("uint64_t") )
+            }));
+        });
+    }
+
+    #[test]
+    fn test_arg_pointer() {
+        let xml = r#"<type category="funcpointer">typedef void (VKAPI_PTR *<name>PFN_blah</name>)(
+  <type>uint32_t</type>* arg1,
+  <type>uint64_t</type>  arg2);</type>"#;
+
+        test::xml_test(xml, |node| {
+            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            assert_eq!(fptr.name, "PFN_blah");
+            assert_eq!(fptr.return_type, Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("void") )
+            });
+
+            assert_eq!(fptr.arguments.len(), 2);
+            assert_eq!(fptr.arguments[0], ("arg1", Type {
+                mutable: true,
+                ty: Box::new( Types::Pointer(Type {
+                    mutable: true,
+                    ty: Box::new( Types::Base("uint32_t") )
+                        
+                }) )
+            }));
+
+            assert_eq!(fptr.arguments[1], ("arg2", Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("uint64_t") )
+            }));
+        });
+    }
+}
 
 /// All of these members are exacly what is in the document with very
 /// little processing
@@ -1086,6 +1350,35 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Command<'doc> {
     }
 }
 
+#[derive(Debug)]
+pub struct EnumRequire<'doc> {
+    pub name:      &'doc str,
+    pub extends:   Option<&'doc str>,
+    pub extnumber: Option<&'doc str>,
+    pub offset:    Option<&'doc str>,
+    pub bitpos:    Option<&'doc str>,
+    pub dir:       Option<&'doc str>,
+    pub value:     Option<&'doc str>, // some of these have escaped xml in them, undo?
+}
+
+#[derive(Debug)]
+pub enum Require<'doc> {
+    Type(&'doc str),
+    Command(&'doc str),
+}
+
+#[derive(Debug)]
+pub struct Feature<'doc> {
+    // info from the feature
+    pub name:   &'doc str,
+    pub api:    &'doc str,
+    pub number: &'doc str,
+}
+
+// #[derive(Debug)]
+// pub struct Extension<'doc> {
+// }
+
 // Dynamically dispatch all of these callbacks so that the user
 // doesn't have to specify an explict type for the callbacks that they
 // are not interested in (we can't know the type statically).
@@ -1099,7 +1392,7 @@ pub struct Callbacks<'doc> {
     on_handle_alias:       Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
     on_enum_definition:    Option<Box<dyn FnMut(EnumDefinition<'doc>) + 'doc>>,
     on_enum_alias:         Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
-    // on_function_pointer:   Option<Box<dyn FnMut(FunctionPointer<'doc>) + 'doc>>,
+    on_function_pointer:   Option<Box<dyn FnMut(FunctionPointer<'doc>) + 'doc>>,
     on_struct:             Option<Box<dyn FnMut(Struct<'doc>) + 'doc>>,
     on_union:              Option<Box<dyn FnMut(Union<'doc>) + 'doc>>,
     on_enum:               Option<Box<dyn FnMut(Enum<'doc>) + 'doc>>,
@@ -1171,12 +1464,12 @@ impl<'doc> Callbacks<'doc> {
         }
     }
 
-    // fn on_function_pointer(&mut self, b: FunctionPointer<'doc>) {
-    //     match &mut self.on_function_pointer {
-    //         Some(cb) => cb(b),
-    //         None     => (),
-    //     }
-    // }
+    fn on_function_pointer(&mut self, b: FunctionPointer<'doc>) {
+        match &mut self.on_function_pointer {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 
     fn on_struct(&mut self, b: Struct<'doc>) {
         match &mut self.on_struct {
@@ -1233,7 +1526,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_handle_alias:       None,
                 on_enum_definition:    None,
                 on_enum_alias:         None,
-                // on_function_pointer:   None,
+                on_function_pointer:   None,
                 on_struct:             None,
                 on_union:              None,
                 on_enum:               None,
@@ -1315,13 +1608,13 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         self
     }
 
-    // pub fn on_function_pointer<F>(mut self, f: F) -> Self
-    // where
-    //     F: FnMut(FunctionPointer<'doc>) + 'doc
-    // {
-    //     self.callbacks.on_function_pointer = Some(Box::new(f));
-    //     self
-    // }
+    pub fn on_function_pointer<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(FunctionPointer<'doc>) + 'doc
+    {
+        self.callbacks.on_function_pointer = Some(Box::new(f));
+        self
+    }
 
     pub fn on_struct<F>(mut self, f: F) -> Self
     where
