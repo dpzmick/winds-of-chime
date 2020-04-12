@@ -648,7 +648,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
 
         // ')(' literal
         let literal = children.next().ok_or(String::from("expected Text node for )( while parsing funcptr"))?;
-        let mut literal = literal.text().ok_or(String::from("Expected literal to be Text"))?.trim_end();
+        let literal = literal.text().ok_or(String::from("Expected literal to be Text"))?.trim_end();
         if literal == ")(void);" {
             // no args
             return Ok(Self {
@@ -666,9 +666,10 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
         // until we hit a pair that ends in ');' instead of ','
         let mut arguments = Vec::new();
 
+        let mut next_base_mutable = true;
         loop {
-            let typ  = children.next().ok_or("Expected <type> child while parsing funcptr arguments")?;
-            let txt  = children.next().ok_or("Expected text child while parsing funcptr arguments")?;
+            let typ = children.next().ok_or("Expected <type> child while parsing funcptr arguments")?;
+            let txt = children.next().ok_or("Expected text child while parsing funcptr arguments")?;
 
             if typ.node_type() != roxml::NodeType::Element {
                 return Err(format!("typ of argument should be Element, got {:?}", typ.node_type()))
@@ -692,15 +693,23 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
             };
 
             let txt = txt.text().unwrap();
-            let spl = txt.split_whitespace().collect::<Vec<_>>();
+            let mut spl = txt.split_whitespace().collect::<Vec<_>>();
 
-            if spl.len() != 1 && spl.len() != 2 {
+            if spl.len() != 1 && spl.len() != 2 && spl.len() != 3 {
                 return Err(format!("txt split by whitespace had wrong len, got {}, txt was '{}'", spl.len(), txt));
+            }
+
+            if spl.last().unwrap() == &"const" {
+                next_base_mutable = false;
+                spl.pop();
+            }
+            else {
+                next_base_mutable = true;
             }
 
             let full_name = if spl.len() == 2 { spl[1] } else { spl[0] };
             let mut typ = Type {
-                mutable: true,  // FIXME handle const?
+                mutable: next_base_mutable,
                 ty:      Box::new(Types::Base(typ)),
             };
 
@@ -708,11 +717,11 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
                 for ptr in spl[0].chars() {
                     if ptr != '*' {
                         return Err(
-                            format!("Found non-'*' char in ptr section of funcptr arg, got '{}'", ptr));
+                            format!("Found non-'*' char in ptr section of funcptr arg, got '{}', spl {:?}", ptr, spl));
                     }
 
                     typ = Type {
-                        mutable: true,   // FIXME handle const?
+                        mutable: true,   // FIXME handle multiple const?
                         ty:      Box::new(Types::Pointer(typ))
                     }
                 }
