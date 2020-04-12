@@ -1939,7 +1939,6 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 "enums"      => self.parse_enums(node), // many of these
                 "commands"   => self.parse_commands(node),
                 "feature"    => self.parse_feature(node), // many of these
-                //"extension"  => self.parse_extension(node), // many of these
                 "extensions" => self.parse_extensions(node), // some sort of grouping
                 _            => panic!("unhandled tag name {}", node.tag_name().name()),
             }
