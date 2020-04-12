@@ -1,6 +1,5 @@
 extern crate roxmltree;
 
-mod error;
 mod helpers;
 mod parser;
 
@@ -35,6 +34,5 @@ fn main() {
         .on_enum(print)
         .on_command(print)
         .on_command_alias(print)
-        .parse_document()
-        .expect("parser");
+        .parse_document();
 }

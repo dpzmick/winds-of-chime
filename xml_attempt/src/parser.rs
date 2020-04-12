@@ -1,12 +1,11 @@
+/// NOTE: there is no error handling in this file
+/// this is a developer tool
+/// error handling is verbose and painful to write
+/// instead, we panic. if you are a developer using this module, you
+/// can look at the panic to figure out what the parser bug is
+
 // crates
 use roxmltree as roxml;
-
-// stdlib
-use std::convert::TryFrom;
-
-/// None of the errors are recoverable.
-/// We attempt to keep them human readable
-pub type ParserError = String;
 
 #[cfg(test)]
 mod test {
@@ -20,27 +19,25 @@ mod test {
     }
 }
 
-fn expect_attr<'a>(node: roxml::Node<'a, '_>, n: &str) -> Result<&'a str, ParserError> {
-    node.attribute(n).ok_or(String::from(n))
+fn expect_attr<'a>(node: roxml::Node<'a, '_>, n: &str) -> &'a str {
+    node.attribute(n).expect(n)
 }
 
-fn get_bool_attr<'doc>(node: roxml::Node<'doc, '_>, nm: &str) -> Result<bool, ParserError> {
+fn get_bool_attr<'doc>(node: roxml::Node<'doc, '_>, nm: &str) -> bool {
     if let Some(v) = node.attribute(nm) {
         match v {
-            "true"  => Ok(true),
-            "false" => Ok(false),
-            _       => Err(format!("Expected either true of false for {}", nm)),
+            "true"  => true,
+            "false" => false,
+            _       => panic!("Expected either true of false for {}", nm),
         }
     }
     else {
-        Ok(false)
+        false
     }
 }
 
 /// get type and name for a command arg or struct/union member
-fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
-    -> Result<(Type<'doc>, &'doc str), ParserError>
-{
+fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>) -> (Type<'doc>, &'doc str) {
     // using libclang was pretty hard, doing this manually seems
     // feasible, there aren't too many cases
     let mut children = xml.children();
@@ -49,33 +46,33 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
 
     // if the first node is a text node, look for the test "const"
     // else the node should be a tag <type>
-    let mut node = children.next().ok_or(String::from("Expected child when getting type/name"))?;
+    let mut node = children.next().expect("Expected child when getting type/name");
     if node.node_type() == roxml::NodeType::Text {
         let txt = node.text().unwrap();
         match txt {
             "const "        => is_mutable = false,
             "struct "       => (), // ignored
             "const struct " => is_mutable = false,
-            _               => return Err(format!("expected 'const ' got {}", txt)),
+            _               => panic!("expected 'const ' got {}", txt),
         }
 
-        node = children.next().ok_or(String::from("Expected child"))?;
+        node = children.next().expect("Expected child");
     }
 
     // whatever is at `node` should be <type> now
     if node.node_type() != roxml::NodeType::Element {
-        return Err(format!("Expected element, got {:?}", node.node_type()));
+        panic!("Expected element, got {:?}", node.node_type());
     }
 
     if node.tag_name().name() != "type" {
-        return Err(format!("Expected <type>, got <{}>", node.tag_name().name()));
+        panic!("Expected <type>, got <{}>", node.tag_name().name());
     }
 
     let type_name = {
         let mut children = node.children();
-        let n = children.next().ok_or(String::from("Expected children"))?;
-        n.text().ok_or(String::from("Expected text"))
-    }?;
+        let n = children.next().expect("children");
+        n.text().expect("text")
+    };
 
     let mut typ = Type {
         mutable: is_mutable,
@@ -83,13 +80,11 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
     };
     is_mutable = true;
 
-    node = children.next().ok_or(String::from("Expected childre"))?;
+    node = children.next().expect("children");
 
     let mut pending = false;
     if node.node_type() == roxml::NodeType::Text {
-        let pointer_str = node.text().ok_or(
-            String::from("Expected text node in pointer section"))?;
-
+        let pointer_str = node.text().expect("Expected text node in pointer section");
         let pointer_str = pointer_str.as_bytes();
 
         let mut i = 0;
@@ -113,15 +108,14 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
             }
             else if c == b'c' {
                 if i + "onst".len() > pointer_str.len() - i { // FIXME check idx
-                    return Err(
-                        String::from("Expected const in pointer str, but there isn't enough string left"));
+                    panic!("Expected const in pointer str, but there isn't enough string left");
                 }
 
                 let sl = &pointer_str[(i+1)..("onst".len()+i+1)];
                 if "onst".as_bytes() != sl {
-                    return Err(
-                        format!("Expected const in pointer str, but didn't find onst, found {:?} instead",
-                                std::str::from_utf8(sl)));
+                    panic!(
+                        "Expected const in pointer str, but didn't find onst, found {:?} instead",
+                        std::str::from_utf8(sl));
                 }
 
 
@@ -130,7 +124,7 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
                 is_mutable = false;
             }
             else {
-                return Err(format!("Unexpected character in pointer section {}", c as char));
+                panic!("Unexpected character in pointer section {}", c as char);
             }
 
             i += 1;
@@ -143,23 +137,23 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
             };
         }
 
-        node = children.next().ok_or(String::from("Expected children"))?;
+        node = children.next().expect("children");
     }
 
     // finally, an element node with the name
     if node.node_type() != roxml::NodeType::Element {
-        return Err(format!("Expected an element, got {:?}", node.node_type()));
+        panic!("Expected an element, got {:?}", node.node_type());
     }
 
     if node.tag_name().name() != "name" {
-        return Err(format!("Expected <name> element, got <{:?}>", node.tag_name().name()));
+        panic!("Expected <name> element, got <{:?}>", node.tag_name().name());
     }
 
     let name = {
         let mut children = node.children();
-        let n = children.next().ok_or(String::from("Expected children"))?;
-        n.text().ok_or(format!("Expected text, got {:?}", n.node_type()))
-    }?;
+        let n = children.next().expect("children");
+        n.text().expect("text")
+    };
 
     let mut maybe_node = children.next();
 
@@ -168,20 +162,20 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
         let open = maybe_node.unwrap().text().unwrap();
         if open.len() == 1 {
             if open != "[" {
-                return Err(format!("Expected [ got '{}'", open));
+                panic!("Expected [ got '{}'", open);
             }
 
             // could also be something like [2]
 
             // next is the array size
-            let sz = children.next().ok_or(String::from("Expected additional children inside of []"))?;
-            let sz = sz.text().ok_or(format!("Expected text"))?; // actually something like <enum>ASDAS</enum>.
+            let sz = children.next().expect("additional children inside of []");
+            let sz = sz.text().expect("text"); // actually something like <enum>ASDAS</enum>.
 
             // finally, close the bracket
-            let close = children.next().ok_or(String::from("Expected additional children (closing ])"))?;
-            let close = close.text().ok_or(String::from("Expected text for close bracket"))?;
+            let close = children.next().expect("Expected additional children (closing ])");
+            let close = close.text().expect("Expected text for close bracket");
             if close != "]" {
-                return Err(format!("Expected ] got '{}'", open));
+                panic!("Expected ] got '{}'", open);
             }
 
             typ = Type {
@@ -191,14 +185,12 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
         }
         else {
             if !open.starts_with("[") || !open.ends_with("]") {
-                return Err(format!("expected [...], got '{}'", open));
+                panic!("expected [...], got '{}'", open);
             }
 
             // the middle must be an int
             let sl = open.get(1..(open.len()-1)).unwrap();
-            let sz = sl.parse::<usize>().map_err(|e| {
-                format!("failed to parse int inside of [], got '{}', error={:?}", sl, e)
-            })?;
+            let sz = sl.parse::<usize>().expect("Failed to parse int");
 
             typ = Type {
                 mutable: true, // FIXME ??? pretty sure this is right
@@ -213,9 +205,9 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
     if maybe_node.is_some() {
         if maybe_node.unwrap().node_type() == roxml::NodeType::Element {
             if maybe_node.unwrap().tag_name().name() != "comment" {
-                return Err(
-                    format!("Expected <comment>, got <{:?}>",
-                            maybe_node.unwrap().tag_name().name()));
+                panic!(
+                    "Expected <comment>, got <{:?}>",
+                    maybe_node.unwrap().tag_name().name());
             }
         }
 
@@ -224,12 +216,10 @@ fn get_type_and_name<'doc>(xml: roxml::Node<'doc, '_>)
 
     // shouldn't be any more
     if maybe_node.is_some() {
-        return Err(String::from("Found more children when none where expected"));
+        panic!("Found more children when none where expected");
     }
 
-    return Ok(
-        (typ, name)
-    );
+    return (typ, name);
 }
 
 #[derive(Debug)]
@@ -239,15 +229,13 @@ pub struct PlatformDefinition<'a> {
     pub comment: &'a str,
 }
 
-impl<'a> TryFrom<roxml::Node<'a, '_>> for PlatformDefinition<'a> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'a, '_>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            name: expect_attr(xml, "name")?,
-            protect: expect_attr(xml, "protect")?,
-            comment: expect_attr(xml, "comment")?,
-        })
+impl<'a> From<roxml::Node<'a, '_>> for PlatformDefinition<'a> {
+    fn from(xml: roxml::Node<'a, '_>) -> Self {
+        Self {
+            name:    expect_attr(xml, "name"),
+            protect: expect_attr(xml, "protect"),
+            comment: expect_attr(xml, "comment"),
+        }
     }
 }
 
@@ -259,7 +247,7 @@ mod test_platform {
     fn test_platform() {
         let xml = "<platform name=\"xlib\" protect=\"VK_USE_PLATFORM_XLIB_KHR\" comment=\"X Window System, Xlib client library\"/>";
         test::xml_test(xml, |node| {
-            let p = PlatformDefinition::try_from(node).expect("Should not fail");
+            let p = PlatformDefinition::from(node);
             assert_eq!(p.name,    "xlib");
             assert_eq!(p.protect, "VK_USE_PLATFORM_XLIB_KHR");
             assert_eq!(p.comment, "X Window System, Xlib client library");
@@ -275,15 +263,13 @@ pub struct TagDefinition<'a> {
     contact: &'a str,
 }
 
-impl<'a> TryFrom<roxml::Node<'a, '_>> for TagDefinition<'a> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'a, '_>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            name: expect_attr(xml, "name")?,
-            author: expect_attr(xml, "author")?,
-            contact: expect_attr(xml, "contact")?,
-        })
+impl<'a> From<roxml::Node<'a, '_>> for TagDefinition<'a> {
+    fn from(xml: roxml::Node<'a, '_>) -> Self {
+        Self {
+            name:    expect_attr(xml, "name"),
+            author:  expect_attr(xml, "author"),
+            contact: expect_attr(xml, "contact"),
+        }
     }
 }
 
@@ -295,7 +281,7 @@ mod test_tag {
     fn test_tag() {
         let xml = "<tag name=\"ANDROID\"     author=\"Google LLC\"                    contact=\"Jesse Hall @critsec\"/>";
         test::xml_test(xml, |node| {
-            let tag = TagDefinition::try_from(node).expect("Should not fail");
+            let tag = TagDefinition::from(node);
             assert_eq!(tag.name,    "ANDROID");
             assert_eq!(tag.author,  "Google LLC");
             assert_eq!(tag.contact, "Jesse Hall @critsec");
@@ -314,19 +300,20 @@ pub struct Typedef<'doc> {
     pub alias: &'doc str,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Typedef<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml_type: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+impl<'doc> From<roxml::Node<'doc, '_>> for Typedef<'doc> {
+    fn from(xml_type: roxml::Node<'doc, '_>) -> Self {
         let mut children = xml_type.children();
+
+        // FIXME simplify
         match children.next() {
             Some(text) => match text.text() {
-                Some("typedef ") => Ok(()), // note the space
-                _ => Err(String::from("Parsing of typedef type failed. Expected text 'typedef'")),
+                Some("typedef ") => (),
+                _                => panic!("Parsing of typedef type failed. Expected text 'typedef'"),
             },
-            None => Err(String::from("Missing expected text node from typedef")),
-        }?;
+            None => panic!("Missing expected text node from typedef"),
+        };
 
+        // FIXME simplify
         let base = match children.next() {
             Some(e) => match e.tag_name().name() {
                 "type" => {
@@ -334,42 +321,41 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Typedef<'doc> {
                     match children.next() {
                         Some(child) => {
                             match children.next() {
-                                Some(_) => Err(String::from("Too many items inside of <type>")),
-                                None    => child.text().ok_or(String::from("Expected text inside of <type>")),
+                                Some(_) => panic!("Too many items inside of <type>"),
+                                None    => child.text().expect("text inside of <type>"),
                             }
                         },
-                        None => Err(String::from("Expected children of <type>"))
+                        None => panic!("Expected children of <type>")
                     }
                 },
-                _ => Err(String::from("Parsing of typedef type failed. Expected a <type> element")),
+                _ => panic!("Parsing of typedef type failed. Expected a <type> element"),
             },
-            None => Err(String::from("Missing expected <type> node from typedef")),
-        }?;
+            None => panic!("Missing expected <type> node from typedef"),
+        };
 
         match children.next() {
-            Some(_) => Ok(()),
-            None => Err(String::from("Missing expected text node from typedef")),
-        }?;
+            Some(_) => (),
+            None    => panic!("Missing expected text node from typedef"),
+        };
 
         let alias = match children.next() {
-            Some(text) => text.text()
-                .ok_or(String::from("Expected text element while parsing typedef")),
-            None => Err(String::from("Missing expected text node in typedef")),
-        }?;
+            Some(text) => text.text().expect("Text element"),
+            None       => panic!("Missing expected text node in typedef"),
+        };
 
         match children.next() {
             Some(text) => match text.text() {
-                Some(";") => Ok(()),
-                _         => Err(String::from("Missing ';' in typedef")),
+                Some(";") => (),
+                _         => panic!("Missing ';' in typedef"),
             },
-            None => Err(String::from("Missing expected ';' text node in typedef")),
-        }?;
+            None => panic!("Missing expected ';' text node in typedef"),
+        };
 
         if children.next().is_some() {
-            return Err(String::from("Parsing of typedef failed. Found more elements, expected none"));
+            panic!("Parsing of typedef failed. Found more elements, expected none");
         }
 
-        Ok(Self { basetype: base, alias })
+        Self { basetype: base, alias }
     }
 }
 
@@ -381,7 +367,7 @@ mod test_typedef {
     fn test_basetype() {
         let xml = "<type category=\"basetype\">typedef <type>uint64_t</type> <name>VkDeviceSize</name>;</type>";
         test::xml_test(xml, |node| {
-            let tag = Typedef::try_from(node).expect("Should not fail");
+            let tag = Typedef::from(node);
             assert_eq!(tag.basetype, "uint64_t");
             assert_eq!(tag.alias,    "VkDeviceSize");
         })
@@ -391,7 +377,7 @@ mod test_typedef {
     fn test_bitmask() {
         let xml = "<type requires=\"VkRenderPassCreateFlagBits\" category=\"bitmask\">typedef <type>VkFlags</type> <name>VkRenderPassCreateFlags</name>;</type>";
         test::xml_test(xml, |node| {
-            let tag = Typedef::try_from(node).expect("Should not fail");
+            let tag = Typedef::from(node);
             assert_eq!(tag.basetype, "VkFlags");
             assert_eq!(tag.alias,    "VkRenderPassCreateFlags");
         })
@@ -411,9 +397,8 @@ pub struct Handle<'doc> {
     pub name:        &'doc str,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Handle<'doc> {
-    type Error = ParserError;
-    fn try_from(xml_type: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+impl<'doc> From<roxml::Node<'doc, '_>> for Handle<'doc> {
+    fn from(xml_type: roxml::Node<'doc, '_>) -> Self {
         let mut children = xml_type.children(); // iterator
         let type_tag_txt = match children.next() {
             Some(type_tag) => {
@@ -423,30 +408,30 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Handle<'doc> {
                         match children.next() {
                             Some(child) => {
                                 match children.next() {
-                                    Some(_) => Err(String::from("Too many items inside of <type>")),
-                                    None    => child.text().ok_or(String::from("Expected text inside of <type>")),
+                                    Some(_) => panic!("Too many items inside of <type>"),
+                                    None    => child.text().expect("Expected text inside of <type>"),
                                 }
                             },
-                            None => Err(String::from("expected <type> to have child"))
+                            None => panic!("expected <type> to have child"),
                         }
                     },
-                    _ => Err(String::from("Expected child to be <type>"))
+                    _ => panic!("Expected child to be <type>"),
                 }
             },
-            None => Err(String::from("Expected child"))
-        }?;
+            None => panic!("Expected child"),
+        };
 
         let is_non_dispatch = type_tag_txt.contains("NON_DISPATCH");
 
         match children.next() {
             Some(paren) => {
-                match paren.text().ok_or(String::from("expected text"))? {
-                    "(" => Ok(()),
-                    _   => Err(String::from("expected '("))
+                match paren.text().expect("text") {
+                    "(" => (),
+                    _   => panic!("expected '("),
                 }
             },
-            None => Err(String::from("expected more children"))
-        }?;
+            None => panic!("expected more children"),
+        }
 
         // <name>SomeNameHere</name>
         let name = match children.next() {
@@ -457,39 +442,39 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Handle<'doc> {
                         match children.next() {
                             Some(child) => {
                                 match children.next() {
-                                    Some(_) => Err(String::from("Too many items inside of <name>")),
-                                    None    => child.text().ok_or(String::from("Expected text inside of <name>")),
+                                    Some(_) => panic!("Too many items inside of <name>"),
+                                    None    => child.text().expect("Expected text inside of <name>"),
                                 }
                             },
-                            None => Err(String::from("expected <name> to have child"))
+                            None => panic!("expected <name> to have child"),
                         }
                     },
-                    _ => Err(String::from("Expected child to be <name>"))
+                    _ => panic!("Expected child to be <name>"),
                 }
             },
-            None => Err(String::from("Expected child"))
-        }?;
+            None => panic!("Expected child"),
+        };
 
         match children.next() {
             Some(paren) => {
-                match paren.text().ok_or(String::from("expected text"))? {
-                    ")" => Ok(()),
-                    _   => Err(String::from("expected '("))
+                match paren.text().expect("text") {
+                    ")" => (),
+                    _   => panic!("expected '(")
                 }
             },
-            None => Err(String::from("expected more children"))
-        }?;
+            None => panic!("expected more children")
+        }
 
         match children.next() {
-            Some(_) => Err(String::from("expected no more children")),
-            None    => Ok(()),
-        }?;
+            Some(_) => panic!("expected no more children"),
+            None    => (),
+        }
 
-        Ok(Self {
+        Self {
             parent:      xml_type.attribute("parent"),
             is_dispatch: !is_non_dispatch,
             name:        name,
-        })
+        }
     }
 }
 
@@ -501,7 +486,7 @@ mod test_handle {
     fn test_handle_simple() {
         let xml = "<type category=\"handle\"><type>VK_DEFINE_HANDLE</type>(<name>VkInstance</name>)</type>";
         test::xml_test(xml, |node| {
-            let handle = Handle::try_from(node).expect("Should not fail");
+            let handle = Handle::from(node);
             assert_eq!(handle.parent,      None);
             assert_eq!(handle.is_dispatch, true);
             assert_eq!(handle.name,        "VkInstance");
@@ -512,7 +497,7 @@ mod test_handle {
     fn test_handle_advanced() {
         let xml = "<type category=\"handle\" parent=\"VkDescriptorPool\"><type>VK_DEFINE_NON_DISPATCHABLE_HANDLE</type>(<name>VkDescriptorSet</name>)</type>";
         test::xml_test(xml, |node| {
-            let handle = Handle::try_from(node).expect("Should not fail");
+            let handle = Handle::from(node);
             assert_eq!(handle.parent,      Some("VkDescriptorPool"));
             assert_eq!(handle.is_dispatch, false);
             assert_eq!(handle.name,        "VkDescriptorSet");
@@ -554,10 +539,8 @@ pub struct FunctionPointer<'doc> {
     // FIXME requires
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+impl<'doc> From<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
         // typedef type[pointer]* (VKAPI_PTR *<name>...</name>)(
         //   <type>xxxx</type>pointers   name,
         //   ...
@@ -567,35 +550,34 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
 
         // first child should be text
         let return_type = {
-            let child = children.next().ok_or(
-                String::from("Expected children when parsing funcptr return_type"))?;
+            let child = children.next().expect("children when parsing funcptr return_type");
 
             if child.node_type() != roxml::NodeType::Text {
-                return Err(String::from("Expected return type to be Text node"));
+                panic!("Expected return type to be Text node");
             }
 
             let spl = child.text().unwrap().split_whitespace().collect::<Vec<_>>();
             if spl.len() != 4 {
-                return Err(format!("Expected the lenght of split section to be 4, got {}", spl.len()));
+                panic!("Expected the lenght of split section to be 4, got {}", spl.len());
             }
 
             if spl[0] != "typedef" {
-                return Err(format!("Expected the string 'typedef', got '{}'", spl[0]));
+                panic!("Expected the string 'typedef', got '{}'", spl[0]);
             }
 
             if spl[2] != "(VKAPI_PTR" {
-                return Err(format!("Expected the string '(VKAPI_PTR', got '{}'", spl[2]));
+                panic!("Expected the string '(VKAPI_PTR', got '{}'", spl[2]);
             }
 
             if spl[3] != "*" {
-                return Err(format!("Expected the string '*', got '{}'", spl[3]));
+                panic!("Expected the string '*', got '{}'", spl[3]);
             }
 
             let ptrspl = spl[1].splitn(2, '*').collect::<Vec<_>>();
             let ptr_cnt = if ptrspl.len() == 2 {
                 for ptr in ptrspl[1].chars() {
                     if ptr != '*' {
-                        return Err(format!("Strange trailing section, contains a '{}', should only be '*", ptr));
+                        panic!("Strange trailing section, contains a '{}', should only be '*", ptr);
                     }
                 }
                 1 + ptrspl[1].len()
@@ -622,44 +604,45 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
         };
 
         let name = {
-            let child = children.next().ok_or(
-                String::from("Expected more children (looking for <name>) while parsing funcptr"))?;
+            let child = children.next().expect("Expected more children (looking for <name>) while parsing funcptr");
 
             if child.node_type() != roxml::NodeType::Element {
-                return Err(format!("Expected <name> node with node_type == Element, got {:?}", child.node_type()));
+                panic!("Expected <name> node with node_type == Element, got {:?}", child.node_type());
             }
 
             if child.tag_name().name() != "name" {
-                return Err(format!("Expected <name> node, got {}", child.tag_name().name()));
+                panic!("Expected <name> node, got {}", child.tag_name().name());
             }
 
             // the contents of this node are the name, should be exactly one elemement
             let grandchildren = child.children().collect::<Vec<_>>();
             if grandchildren.len() != 1 {
-                return Err(format!("Too many children of funcpointer <name> node, got {}", grandchildren.len()));
+                panic!("Too many children of funcpointer <name> node, got {}", grandchildren.len());
             }
 
             if grandchildren[0].node_type() != roxml::NodeType::Text {
-                return Err(format!("Expected <name> grandchild node with node_type == Element, got {:?}", grandchildren[0].node_type()));
+                panic!("Expected <name> grandchild node with node_type == Element, got {:?}", grandchildren[0].node_type());
             }
 
             grandchildren[0].text().unwrap()
         };
 
         // ')(' literal
-        let literal = children.next().ok_or(String::from("expected Text node for )( while parsing funcptr"))?;
-        let literal = literal.text().ok_or(String::from("Expected literal to be Text"))?.trim_end();
+        let literal = children.next().expect("expected Text node for )( while parsing funcptr");
+        let literal = literal.text().expect("Expected literal to be Text").trim_end();
         if literal == ")(void);" {
             // no args
-            return Ok(Self {
+            return Self {
                 name,
                 return_type,
                 arguments: Vec::new(),
-            })
+            };
         }
 
+        // FIXME if first argument is const, this will explode
+        // there aren't any of those in today's vk.xml
         if literal != ")(" {
-            return Err(format!("Expected literal ')(\n', got {}", literal));
+            panic!("Expected literal ')(\n', got {}", literal);
         }
 
         // iterate in pairs of <type>xx</type>(whitespace or pointers)name,
@@ -668,25 +651,25 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
 
         let mut next_base_mutable = true;
         loop {
-            let typ = children.next().ok_or("Expected <type> child while parsing funcptr arguments")?;
-            let txt = children.next().ok_or("Expected text child while parsing funcptr arguments")?;
+            let typ = children.next().expect("<type> child while parsing funcptr arguments");
+            let txt = children.next().expect("text child while parsing funcptr arguments");
 
             if typ.node_type() != roxml::NodeType::Element {
-                return Err(format!("typ of argument should be Element, got {:?}", typ.node_type()))
+                panic!("typ of argument should be Element, got {:?}", typ.node_type());
             }
 
             if txt.node_type() != roxml::NodeType::Text {
-                return Err(format!("txt of argument should be Text , got {:?}", txt.node_type()))
+                panic!("txt of argument should be Text , got {:?}", txt.node_type());
             }
 
             let typ = {
                 let grandchildren = typ.children().collect::<Vec<_>>();
                 if grandchildren.len() != 1 {
-                    return Err(format!("Wrong len for funcptr arg grandchildren, got {}", grandchildren.len()));
+                    panic!("Wrong len for funcptr arg grandchildren, got {}", grandchildren.len());
                 }
 
                 if grandchildren[0].node_type() != roxml::NodeType::Text {
-                    return Err(format!("Wrong node_type for funcptr arg grandchildren, got {:?}", grandchildren[0].node_type()));
+                    panic!("Wrong node_type for funcptr arg grandchildren, got {:?}", grandchildren[0].node_type());
                 }
 
                 grandchildren[0].text().unwrap()
@@ -696,7 +679,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
             let mut spl = txt.split_whitespace().collect::<Vec<_>>();
 
             if spl.len() != 1 && spl.len() != 2 && spl.len() != 3 {
-                return Err(format!("txt split by whitespace had wrong len, got {}, txt was '{}'", spl.len(), txt));
+                panic!("txt split by whitespace had wrong len, got {}, txt was '{}'", spl.len(), txt);
             }
 
             if spl.last().unwrap() == &"const" {
@@ -716,8 +699,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
             if spl.len() == 2 {
                 for ptr in spl[0].chars() {
                     if ptr != '*' {
-                        return Err(
-                            format!("Found non-'*' char in ptr section of funcptr arg, got '{}', spl {:?}", ptr, spl));
+                        panic!("Found non-'*' char in ptr section of funcptr arg, got '{}', spl {:?}", ptr, spl);
                     }
 
                     typ = Type {
@@ -738,11 +720,11 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
             }
         }
 
-        Ok(Self {
+        Self {
             name,
             return_type,
             arguments,
-        })
+        }
     }
 }
 
@@ -757,7 +739,7 @@ mod test_function_pointer {
   <type>uint64_t</type>  arg2);</type>"#;
 
         test::xml_test(xml, |node| {
-            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            let fptr = FunctionPointer::from(node);
             assert_eq!(fptr.name, "PFN_blah");
             assert_eq!(fptr.return_type, Type {
                 mutable: true,
@@ -781,7 +763,7 @@ mod test_function_pointer {
     fn test_noarg() {
         let xml = r#"<type category="funcpointer">typedef void (VKAPI_PTR *<name>PFN_blah</name>)(void);</type>"#;
         test::xml_test(xml, |node| {
-            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            let fptr = FunctionPointer::from(node);
             assert_eq!(fptr.name, "PFN_blah");
             assert_eq!(fptr.return_type, Type {
                 mutable: true,
@@ -799,7 +781,7 @@ mod test_function_pointer {
   <type>uint64_t</type>  arg2);</type>"#;
 
         test::xml_test(xml, |node| {
-            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            let fptr = FunctionPointer::from(node);
             assert_eq!(fptr.name, "PFN_blah");
             assert_eq!(fptr.return_type, Type {
                 mutable: true,
@@ -830,7 +812,7 @@ mod test_function_pointer {
   <type>uint64_t</type>  arg2);</type>"#;
 
         test::xml_test(xml, |node| {
-            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            let fptr = FunctionPointer::from(node);
             assert_eq!(fptr.name, "PFN_blah");
             assert_eq!(fptr.return_type, Type {
                 mutable: true,
@@ -867,7 +849,7 @@ mod test_function_pointer {
     <type>void</type>*                                       pUserData);</type>"#;
 
         test::xml_test(xml, |node| {
-            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            let fptr = FunctionPointer::from(node);
             assert_eq!(fptr.name, "PFN_vkDebugReportCallbackEXT");
             assert_eq!(fptr.return_type, Type {
                 mutable: true,
@@ -899,20 +881,18 @@ pub struct Member<'doc> {
     pub optional:       Option<&'doc str>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Member<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        let (typ, name) = get_type_and_name(xml)?;
-        Ok(Self {
+impl<'doc> From<roxml::Node<'doc, '_>> for Member<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self  {
+        let (typ, name) = get_type_and_name(xml);
+        Self {
             name:           name,
             typ:            typ,
             values:         xml.attribute("values"),
             len:            xml.attribute("len"),
             altlen:         xml.attribute("altlen"),
-            noautovalidity: get_bool_attr(xml, "noautovalidity")?,
+            noautovalidity: get_bool_attr(xml, "noautovalidity"),
             optional:       xml.attribute("optional"),
-        })
+        }
     }
 }
 
@@ -924,7 +904,7 @@ mod member_test {
     fn test_simple() {
         let xml = "<member><type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: true, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -939,7 +919,7 @@ mod member_test {
     fn test_no_spaces() {
         let xml = "<member><type>uint32_t</type><name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: true, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -954,7 +934,7 @@ mod member_test {
     fn test_noautovalidity() {
         let xml = "<member noautovalidity=\"true\"><type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: true, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -969,7 +949,7 @@ mod member_test {
     fn test_const() {
         let xml = "<member>const <type>uint32_t</type>        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type { mutable: false, ty: Box::new(Types::Base("uint32_t"))});
             assert_eq!(m.values,         None);
@@ -984,7 +964,7 @@ mod member_test {
     fn test_ptr1() {
         let xml = "<member>const <type>uint32_t</type>*        <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -1000,7 +980,7 @@ mod member_test {
     fn test_ptr2() {
         let xml = "<member>const <type>uint32_t</type>**     <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -1019,7 +999,7 @@ mod member_test {
     fn test_ptr_nasty() {
         let xml = "<member>const <type>uint32_t</type>* const*     <name>width</name></member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -1038,7 +1018,7 @@ mod member_test {
     fn test_arr_constant() {
         let xml = "<member><type>uint32_t</type><name>width</name>[2]</member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -1056,7 +1036,7 @@ mod member_test {
     fn test_arr_str() {
         let xml = "<member><type>uint32_t</type><name>width</name>[<enum>VK_CONSTANT_OF_SOME_SORT</enum>]</member>";
         test::xml_test(xml, |node| {
-            let m = Member::try_from(node).expect("should not fail");
+            let m = Member::from(node);
             assert_eq!(m.name, "width");
             assert_eq!(m.typ, Type {
                 mutable: true,
@@ -1082,24 +1062,23 @@ pub struct Struct<'doc> {
     pub members:       Vec<Member<'doc>>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Struct<'doc> {
-    type Error = ParserError;
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        let name = xml.attribute("name").ok_or(String::from("expected name attribute on struct"))?;
+impl<'doc> From<roxml::Node<'doc, '_>> for Struct<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        let name = xml.attribute("name").expect("name attribute on struct");
         let mut members = Vec::new();
         for member in xml.children() {
             if member.node_type() == roxml::NodeType::Text { continue; }
             if member.node_type() == roxml::NodeType::Comment { continue; }
             if member.tag_name().name() == "comment" { continue; }
-            members.push( Member::try_from(member)? );
+            members.push(Member::from(member));
         }
 
-        Ok(Struct {
+        Struct {
             name:          name,
             structextends: xml.attribute("structextends"),
-            returnedonly:  get_bool_attr(xml, "returnedonly")?,
+            returnedonly:  get_bool_attr(xml, "returnedonly"),
             members:       members,
-        })
+        }
     }
 }
 
@@ -1121,7 +1100,7 @@ mod struct_test {
 </type>
 "#;
         test::xml_test(xml, |node| {
-            let m = Struct::try_from(node).expect("should not fail");
+            let m = Struct::from(node);
             assert_eq!(m.name, "VkShaderStatisticsInfoAMD");
             assert_eq!(m.returnedonly, true);
             assert_eq!(m.structextends, None);
@@ -1136,23 +1115,19 @@ pub struct Union<'doc> {
     pub members: Vec<Member<'doc>>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Union<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        let name = xml.attribute("name").ok_or(
-            String::from("no name attribute found on union")
-        )?;
+impl<'doc> From<roxml::Node<'doc, '_>> for Union<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        let name = xml.attribute("name").expect("no name attribute found on union");
 
         let mut members = Vec::new();
         for member in xml.children() {
             if member.node_type() == roxml::NodeType::Text { continue; }
             if member.node_type() == roxml::NodeType::Comment { continue; }
             if member.tag_name().name() == "comment" { continue; }
-            members.push(Member::try_from(member)?);
+            members.push(Member::from(member));
         }
 
-        Ok(Self {name, members})
+        Self {name, members}
     }
 }
 
@@ -1172,7 +1147,7 @@ mod union_test {
 </type>
 "#;
         test::xml_test(xml, |node| {
-            let m = Union::try_from(node).expect("should not fail");
+            let m = Union::from(node);
             assert_eq!(m.name, "VkPerformanceCounterResultKHR");
             assert_eq!(m.members.len(), 6);
         });
@@ -1188,11 +1163,9 @@ pub enum EnumMember<'doc> {
     Alias(&'doc str,  &'doc str),   // FIXME use Alias type here
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for EnumMember<'doc> {
-    type Error = ParserError;
-
-    fn try_from(node: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        let name = node.attribute("name").ok_or(String::from("no name found in <enum> value"))?;
+impl<'doc> From<roxml::Node<'doc, '_>> for EnumMember<'doc> {
+    fn from(node: roxml::Node<'doc, '_>) -> Self {
+        let name = node.attribute("name").expect("no name found in <enum> value");
 
         let value  = node.attribute("value");
         let bitpos = node.attribute("bitpos");
@@ -1200,19 +1173,20 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for EnumMember<'doc> {
 
         match (value, bitpos, alias) {
             (Some(value), None, None) => {
-                Ok(Self::Value(name, value))
+                Self::Value(name, value)
             },
             (None, Some(bitpos), None) => {
-                let bp = bitpos.parse::<usize>().map_err(|_| {
-                    format!("malformed bitpos, got '{}'", bitpos)
-                })?;
+                let bp = match bitpos.parse::<usize>() {
+                    Ok(bp) => bp,
+                    _      => panic!("malformed bitpos, got '{}'", bitpos)
+                };
 
-                Ok(Self::BitPos(name, bp))
+                Self::BitPos(name, bp)
             },
             (None, None, Some(alias)) => {
-                Ok(Self::Alias(name, alias))
+                Self::Alias(name, alias)
             },
-            _ => Err(String::from("expected only one of either value and bitpos, got both"))
+            _ => panic!("bad combination of value, bitpos, alias")
         }
     }
 }
@@ -1225,7 +1199,7 @@ mod test_enum_value {
     fn test_value() {
         let xml = r#"<enum value="0x123" name="VK_ASD"/>"#;
         test::xml_test(xml, |node| {
-            let m = EnumMember::try_from(node).expect("should not fail");
+            let m = EnumMember::from(node);
             match m {
                 EnumMember::Value(name, value) => {
                     assert_eq!(name, "VK_ASD");
@@ -1241,7 +1215,7 @@ mod test_enum_value {
     fn test_bitpos() {
         let xml = r#"<enum bitpos="4" name="VK_ASD"/>"#;
         test::xml_test(xml, |node| {
-            let m = EnumMember::try_from(node).expect("should not fail");
+            let m = EnumMember::from(node);
             match m {
                 EnumMember::BitPos(name, pos) => {
                     assert_eq!(name, "VK_ASD");
@@ -1257,7 +1231,7 @@ mod test_enum_value {
     fn test_alias() {
         let xml = r#"<enum name="VK_ASD" alias="VK_OTHER"/>"#;
         test::xml_test(xml, |node| {
-            let m = EnumMember::try_from(node).expect("should not fail");
+            let m = EnumMember::from(node);
             match m {
                 EnumMember::Alias(name, alias_of) => {
                     assert_eq!(name, "VK_ASD");
@@ -1284,26 +1258,23 @@ pub struct Enum<'doc> {
     pub members:   Vec<EnumMember<'doc>>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Enum<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        let name = xml.attribute("name").ok_or(
-            String::from("expected name attribute on enums tag"))?;
+impl<'doc> From<roxml::Node<'doc, '_>> for Enum<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        let name = xml.attribute("name").expect("name attribute on enums tag");
 
         let enum_type = {
             if name == "API Constants" { // special case
                 EnumType::APIConstants
             }
             else {
-                let typ = xml.attribute("type").ok_or(
-                    String::from("Missing attribute type from enums tag"))?;
+                let typ = xml.attribute("type").expect(
+                    "Missing attribute type from enums tag");
 
                 match typ {
-                    "enum" => Ok(EnumType::Enum),
-                    "bitmask" => Ok(EnumType::BitMask),
-                    _ => Err(format!("expected bitmask or enum, got '{}'", typ)),
-                }?
+                    "enum"    => EnumType::Enum,
+                    "bitmask" => EnumType::BitMask,
+                    _         => panic!("expected bitmask or enum, got '{}'", typ),
+                }
             }
         };
 
@@ -1312,14 +1283,14 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Enum<'doc> {
             if member.node_type() != roxml::NodeType::Element { continue; } // some text nodes
             if member.tag_name().name() == "comment" { continue; } // some comments too
             if member.tag_name().name() == "unused" { continue; } // UGH
-            members.push(EnumMember::try_from(member)?);
+            members.push(EnumMember::from(member));
         }
 
-        Ok(Enum {
+        Enum {
             name,
             enum_type,
             members,
-        })
+        }
     }
 }
 
@@ -1329,14 +1300,12 @@ pub struct CommandProto<'doc> {
     pub name: &'doc str,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for CommandProto<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+impl<'doc> From<roxml::Node<'doc, '_>> for CommandProto<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
         // we don't need all of the features of this helper, but
         // probably fine to use it here
-        let (typ, name) = get_type_and_name(xml)?;
-        Ok(Self { typ, name })
+        let (typ, name) = get_type_and_name(xml);
+        Self { typ, name }
     }
 }
 
@@ -1349,18 +1318,16 @@ pub struct CommandParam<'doc> {
     pub len:        Option<&'doc str>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for CommandParam<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
-        let (typ, name) = get_type_and_name(xml)?;
-        Ok(Self {
+impl<'doc> From<roxml::Node<'doc, '_>> for CommandParam<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        let (typ, name) = get_type_and_name(xml);
+        Self {
             name:           name,
             typ:            typ,
             optional:       xml.attribute("optional"),
             externsync:     xml.attribute("externsync"),
             len:            xml.attribute("len"),
-        })
+        }
     }
 }
 
@@ -1380,30 +1347,27 @@ pub struct Command<'doc> {
     pub pipeline:       Option<&'doc str>,
 }
 
-impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Command<'doc> {
-    type Error = ParserError;
-
-    fn try_from(xml: roxml::Node<'doc, '_>) -> Result<Self, Self::Error> {
+impl<'doc> From<roxml::Node<'doc, '_>> for Command<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
         // have to fine the proto node (should be first non-text child)
         let mut children = xml.children();
         let proto_node = loop {
-            let child = children.next().ok_or(
-                String::from("Expected additional children while looking for proto node"))?;
+            let child = children.next().expect("additional children while looking for proto node");
 
             if child.node_type() != roxml::NodeType::Element { continue; }
             break child;
         };
 
-        let proto = CommandProto::try_from(proto_node)?;
+        let proto = CommandProto::from(proto_node);
 
         let mut params = Vec::new();
         for param in children { // the rest
             if param.node_type() != roxml::NodeType::Element { continue; }
             if param.tag_name().name() != "param" { continue; } // skip implictexternsyncparam
-            params.push(CommandParam::try_from(param)?);
+            params.push(CommandParam::from(param));
         }
 
-        Ok(Self {
+        Self {
             proto:          proto,
             params:         params,
             successcodes:   xml.attribute("successcodes"),
@@ -1412,7 +1376,7 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for Command<'doc> {
             renderpass:     xml.attribute("renderpass"),
             cmdbufferlevel: xml.attribute("cmdbufferlevel"),
             pipeline:       xml.attribute("pipeline"),
-        })
+        }
     }
 }
 
@@ -1424,21 +1388,187 @@ pub struct EnumRequire<'doc> {
     pub offset:    Option<&'doc str>,
     pub bitpos:    Option<&'doc str>,
     pub dir:       Option<&'doc str>,
-    pub value:     Option<&'doc str>, // some of these have escaped xml in them, undo?
+    pub value:     Option<&'doc str>,
+}
+
+impl<'doc> From<roxml::Node<'doc, '_>> for EnumRequire<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        Self {
+            name:      xml.attribute("name").expect("Name attribute"),
+            extends:   xml.attribute("extends"),
+            extnumber: xml.attribute("extnumber"),
+            offset:    xml.attribute("offset"),
+            bitpos:    xml.attribute("bitpos"),
+            dir:       xml.attribute("dir"),
+            value:     xml.attribute("value"),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum Require<'doc> {
     Type(&'doc str),
     Command(&'doc str),
+    Enum(EnumRequire<'doc>),
+}
+
+impl<'doc> From<roxml::Node<'doc, '_>> for Require<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        if xml.node_type() != roxml::NodeType::Element {
+            panic!("expected nodetype == element, got {:?}", xml.node_type());
+        }
+
+        match xml.tag_name().name() {
+            "type"    => Self::Type(xml.attribute("name").expect("Name attribute")),
+            "command" => Self::Command(xml.attribute("name").expect("Name attribute")),
+            "enum"    => Self::Enum(EnumRequire::from(xml)),
+            _         => panic!("unhandeled tag_name for require. got '{}'", xml.tag_name().name())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_require {
+    use super::*;
+
+    #[test]
+    fn test_type() {
+        let xml = r#"<type name="VK_API_VERSION"/>"#;
+        test::xml_test(xml, |node| {
+            let r = Require::from(node);
+            match r {
+                Require::Type(s) => assert_eq!(s, "VK_API_VERSION"),
+                _ => panic!("wrong type"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_command() {
+        let xml = r#"<command name="vkGetDeviceQueue"/>"#;
+        test::xml_test(xml, |node| {
+            let r = Require::from(node);
+            match r {
+                Require::Command(s) => assert_eq!(s, "vkGetDeviceQueue"),
+                _ => panic!("wrong type"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_simple_enum() {
+        let xml = r#"<enum name="VK_LOD_CLAMP_NONE"/>"#;
+        test::xml_test(xml, |node| {
+            let r = Require::from(node);
+            match r {
+                Require::Enum(e) => {
+                    assert_eq!(e.name, "VK_LOD_CLAMP_NONE");
+                    assert_eq!(e.extends,   None);
+                    assert_eq!(e.extnumber, None);
+                    assert_eq!(e.offset,    None);
+                    assert_eq!(e.bitpos,    None);
+                    assert_eq!(e.dir,       None);
+                    assert_eq!(e.value,     None);
+                },
+                _ => panic!("wrong type"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_fancy_enum() {
+        let xml = r#"<enum extends="VkStructureType" extnumber="61"  offset="3"          name="VK_STRUCTURE_TYPE_DEVICE_GROUP_RENDER_PASS_BEGIN_INFO"/>"#;
+        test::xml_test(xml, |node| {
+            let r = Require::from(node);
+            match r {
+                Require::Enum(e) => {
+                    assert_eq!(e.name,      "VK_STRUCTURE_TYPE_DEVICE_GROUP_RENDER_PASS_BEGIN_INFO");
+                    assert_eq!(e.extends,   Some("VkStructureType"));
+                    assert_eq!(e.extnumber, Some("61")); // FIXME parse?
+                    assert_eq!(e.offset,    Some("3"));  // FIXME parse?
+                    assert_eq!(e.bitpos,    None);
+                    assert_eq!(e.dir,       None);
+                    assert_eq!(e.value,     None);
+                },
+                _ => panic!("wrong type"),
+            }
+        });
+    }
 }
 
 #[derive(Debug)]
 pub struct Feature<'doc> {
     // info from the feature
-    pub name:   &'doc str,
-    pub api:    &'doc str,
-    pub number: &'doc str,
+    pub name:     &'doc str,
+    pub api:      Option<&'doc str>,
+    pub number:   Option<&'doc str>,
+    pub requires: Vec<Vec<Require<'doc>>>,
+}
+
+impl<'doc> From<roxml::Node<'doc, '_>> for Feature<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        let mut requires = Vec::new();
+        for child in xml.children() {
+            if child.node_type() == roxml::NodeType::Text { continue; }
+
+            let mut reqs = Vec::new();
+            for child in child.children() {
+                if child.node_type() == roxml::NodeType::Text { continue; }
+                if child.tag_name().name() == "comment" { continue; }
+                reqs.push(Require::from(child));
+            }
+            requires.push(reqs);
+        }
+
+        Self {
+            name:   xml.attribute("name").expect("Name attribute"),
+            api:    xml.attribute("api"),
+            number: xml.attribute("number"),
+            requires,
+        }
+    }
+}
+
+#[cfg(test)]
+mod feature_test {
+    use super::*;
+
+    #[test]
+    fn test_feature() {
+        let xml = r#" <feature api="vulkan" name="VK_VERSION_1_1" number="1.1" comment="Vulkan 1.1 core API interface definitions.">
+        <require>
+            <type name="VK_API_VERSION_1_1"/>
+        </require>
+        <require comment="Device Initialization">
+            <command name="vkEnumerateInstanceVersion"/>
+        </require>
+        <require comment="Promoted from VK_KHR_relaxed_block_layout, which has no API"/>
+        <require comment="Promoted from VK_KHR_storage_buffer_storage_class, which has no API"/>
+        <require comment="Originally based on VK_KHR_subgroup (extension 94), but the actual enum block used was, incorrectly, that of extension 95">
+            <enum extends="VkStructureType" extnumber="95"  offset="0"          name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES"/>
+            <type                                       name="VkPhysicalDeviceSubgroupProperties"/>
+            <type                                       name="VkSubgroupFeatureFlags"/>
+            <type                                       name="VkSubgroupFeatureFlagBits"/>
+        </require>
+        <require comment="Promoted from VK_KHR_bind_memory2">
+            <command name="vkBindBufferMemory2"/>
+            <command name="vkBindImageMemory2"/>
+            <enum extends="VkStructureType" extnumber="158" offset="0"          name="VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO"/>
+            <enum extends="VkStructureType" extnumber="158" offset="1"          name="VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO"/>
+            <enum bitpos="10" extends="VkImageCreateFlagBits"                   name="VK_IMAGE_CREATE_ALIAS_BIT"/>
+            <type name="VkBindBufferMemoryInfo"/>
+            <type name="VkBindImageMemoryInfo"/>
+        </require>
+     </feature>"#;
+
+        test::xml_test(xml, |node| {
+            let r = Feature::from(node);
+            assert_eq!(r.name, "VK_VERSION_1_1");
+            assert_eq!(r.api, Some("vulkan"));
+            assert_eq!(r.number, Some("1.1"));
+            assert_eq!(r.requires.len(), 6);
+        });
+    }
 }
 
 // #[derive(Debug)]
@@ -1464,6 +1594,7 @@ pub struct Callbacks<'doc> {
     on_enum:               Option<Box<dyn FnMut(Enum<'doc>) + 'doc>>,
     on_command:            Option<Box<dyn FnMut(Command<'doc>) + 'doc>>,
     on_command_alias:      Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
+    on_feature:            Option<Box<dyn FnMut(Feature<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -1571,6 +1702,13 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_feature(&mut self, b: Feature<'doc>) {
+        match &mut self.on_feature {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -1598,6 +1736,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_enum:               None,
                 on_command:            None,
                 on_command_alias:      None,
+                on_feature:            None,
             }
         }
     }
@@ -1722,57 +1861,60 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         self
     }
 
-    pub fn parse_document(mut self) -> Result<(), ParserError> {
+    pub fn on_feature<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Feature<'doc>) + 'doc
+    {
+        self.callbacks.on_feature = Some(Box::new(f));
+        self
+    }
+
+    pub fn parse_document(mut self) {
         let registry = self.document.root_element();
         for node in registry.children() {
             // NOTE: some of the nodes are Text() whitespace between elements
             match node.tag_name().name() {
                 // ignore all comments
                 "comment"   => continue,
-                "platforms" => self.parse_platforms(node)?,
-                "tags"      => self.parse_tags(node)?,
-                "types"     => self.parse_types(node)?,
-                "enums"     => self.parse_enums(node)?, // many of these
-                "commands"  => self.parse_commands(node)?,
+                "platforms" => self.parse_platforms(node),
+                "tags"      => self.parse_tags(node),
+                "types"     => self.parse_types(node),
+                "enums"     => self.parse_enums(node), // many of these
+                "commands"  => self.parse_commands(node),
+                "feature"   => self.parse_feature(node), // many of these
                 _           => continue,
             }
         }
-
-        Ok(())
     }
 
-    fn parse_platforms(&mut self, node: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_platforms(&mut self, node: roxml::Node<'doc, '_>) {
         for platform in node.children() {
             // some text nodes show up here
             if !platform.is_element() { continue; }
 
-            let p = PlatformDefinition::try_from(platform)?;
+            let p = PlatformDefinition::from(platform);
             self.callbacks.on_plaftform(p);
         }
-
-        Ok(())
     }
 
-    fn parse_tags(&mut self, node: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_tags(&mut self, node: roxml::Node<'doc, '_>) {
         for tag in node.children() {
             // some text nodes show up here
             if !tag.is_element() { continue; }
 
-            let t = TagDefinition::try_from(tag)?;
+            let t = TagDefinition::from(tag);
             self.callbacks.on_tag(t);
         }
-
-        Ok(())
     }
 
-    fn parse_types(&mut self, node: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_types(&mut self, node: roxml::Node<'doc, '_>) {
         for xml_type in node.children() {
             // some text nodes show up here, we are skipping them
             if !xml_type.is_element() { continue; }
             let tag_name = xml_type.tag_name().name();
             if tag_name == "comment" { continue; };
             if tag_name != "type" {
-                return Err(format!("Unexepected tag with name '{}' in types section", tag_name));
+                panic!("Unexepected tag with name '{}' in types section", tag_name);
             }
 
             let category = xml_type.attribute("category");
@@ -1793,9 +1935,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                     continue;
                 }
                 else {
-                    return Err(
-                        format!("Got a type node with an unexpected set of attributes. '{:?}",
-                        xml_type));
+                    panic!("Got a type node with an unexpected set of attributes. '{:?}",
+                           xml_type);
                 }
             }
 
@@ -1804,28 +1945,25 @@ impl<'doc, 'input> Parser<'doc, 'input> {
             match category {
                 "include"     => continue,
                 "define"      => continue,
-                "basetype"    => self.parse_basetype(xml_type)?,
-                "bitmask"     => self.parse_bitmask_def(xml_type)?,
-                "handle"      => self.parse_handle(xml_type)?,
-                "enum"        => self.parse_enum_def(xml_type)?,
-                "funcpointer" => self.parse_funcpointer(xml_type)?,
-                "struct"      => self.parse_struct(xml_type)?,
-                "union"       => self.parse_union(xml_type)?,
+                "basetype"    => self.parse_basetype(xml_type),
+                "bitmask"     => self.parse_bitmask_def(xml_type),
+                "handle"      => self.parse_handle(xml_type),
+                "enum"        => self.parse_enum_def(xml_type),
+                "funcpointer" => self.parse_funcpointer(xml_type),
+                "struct"      => self.parse_struct(xml_type),
+                "union"       => self.parse_union(xml_type),
 
                 // bail on something we don't know how to handle
-                _ => return Err(format!("Got a type node with unexpected category='{}'", category)),
+                _ => panic!("Got a type node with unexpected category='{}'", category),
             }
         }
-
-        Ok(())
     }
 
-    fn parse_basetype(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        self.callbacks.on_basetype(Typedef::try_from(xml_type)?);
-        Ok(())
+    fn parse_basetype(&mut self, xml_type: roxml::Node<'doc, '_>) {
+        self.callbacks.on_basetype(Typedef::from(xml_type));
     }
 
-    fn parse_bitmask_def(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_bitmask_def(&mut self, xml_type: roxml::Node<'doc, '_>) {
         match xml_type.attribute("alias") {
             Some(alias) => {
                 match xml_type.attribute("name") {
@@ -1834,19 +1972,17 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                             basetype:  alias, // these names are confusing
                             aliastype: name,
                         });
-                        Ok(())
                     },
-                    None => Err(String::from("Expected a name attribute when alias attribute was found")),
+                    None => panic!("Expected a name attribute when alias attribute was found"),
                 }
             },
             None => {
-                self.callbacks.on_bitmask_definition(Typedef::try_from(xml_type)?);
-                Ok(())
+                self.callbacks.on_bitmask_definition(Typedef::from(xml_type));
             }
         }
     }
 
-    fn parse_handle(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_handle(&mut self, xml_type: roxml::Node<'doc, '_>) {
         match xml_type.attribute("alias") {
             Some(alias) => {
                 match xml_type.attribute("name") {
@@ -1855,19 +1991,17 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                             basetype:  alias,
                             aliastype: name,
                         });
-                        Ok(())
                     },
-                    None => Err(String::from("Expected a name attribute when alias attribute was found")),
+                    None => panic!("Expected a name attribute when alias attribute was found"),
                 }
             },
             None => {
-                self.callbacks.on_handle(Handle::try_from(xml_type)?);
-                Ok(())
+                self.callbacks.on_handle(Handle::from(xml_type));
             }
         }
     }
 
-    fn parse_enum_def(&mut self, xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_enum_def(&mut self, xml_type: roxml::Node<'doc, '_>) {
         match xml_type.attribute("name") {
             Some(name) => {
                 match xml_type.attribute("alias") {
@@ -1876,42 +2010,36 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                             basetype:  alias,  // again, confusing. is this right?
                             aliastype: name,
                         });
-                        Ok(())
                     },
                     None => {
                         self.callbacks.on_enum_definition(EnumDefinition {
                             name
                         });
-                        Ok(())
                     }
                 }
             },
-            None => Err(String::from("Expected 'name' attribute for enum"))
+            None => panic!("Expected 'name' attribute for enum")
         }
     }
 
-    fn parse_funcpointer(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        self.callbacks.on_function_pointer(FunctionPointer::try_from(xml)?);
-        Ok(())
+    fn parse_funcpointer(&mut self, xml: roxml::Node<'doc, '_>) {
+        self.callbacks.on_function_pointer(FunctionPointer::from(xml));
     }
 
     // FIXME what is structextends
-    fn parse_struct(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        self.callbacks.on_struct(Struct::try_from(xml)?);
-        Ok(())
+    fn parse_struct(&mut self, xml: roxml::Node<'doc, '_>) {
+        self.callbacks.on_struct(Struct::from(xml));
     }
 
-    fn parse_union(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        self.callbacks.on_union(Union::try_from(xml)?);
-        Ok(())
+    fn parse_union(&mut self, xml: roxml::Node<'doc, '_>) {
+        self.callbacks.on_union(Union::from(xml));
     }
 
-    fn parse_enums(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        self.callbacks.on_enum(Enum::try_from(xml)?);
-        Ok(())
+    fn parse_enums(&mut self, xml: roxml::Node<'doc, '_>) {
+        self.callbacks.on_enum(Enum::from(xml));
     }
 
-    fn parse_commands(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+    fn parse_commands(&mut self, xml: roxml::Node<'doc, '_>) {
         for command in xml.children() {
             if command.node_type() != roxml::NodeType::Element { continue; }
             match command.attribute("name") {
@@ -1922,21 +2050,22 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                                 basetype:  alias,  // again, confusing. is this right?
                                 aliastype: name,
                             });
-                            Ok(())
                         },
-                        None => Err(String::from("Expected 'name' attribute for command alias"))
+                        None => panic!("Expected 'name' attribute for command alias"),
                     }
                 },
                 None => {
-                    self.callbacks.on_command(Command::try_from(command)?);
-                    Ok(())
+                    self.callbacks.on_command(Command::from(command));
                 }
-            }?;
+            };
         }
+    }
 
-        Ok(())
+    fn parse_feature(&mut self, xml: roxml::Node<'doc, '_>) {
+        self.callbacks.on_feature(Feature::from(xml))
     }
 }
 
 // FIXME all of the ctors should check that the thing they were passed was actually the right tag
 // FIXME test the actual parser, make sure it delivers the right callbacks (this should be done as a regression test maybe)
+// FIXME convert all errors into panics!. nothing is recoverable and this is a dev tool
