@@ -1571,9 +1571,49 @@ mod feature_test {
     }
 }
 
-// #[derive(Debug)]
-// pub struct Extension<'doc> {
-// }
+#[derive(Debug)]
+pub struct Extension<'doc> {
+    pub name:          &'doc str,
+    pub number:        &'doc str,
+    pub typ:           Option<&'doc str>,
+    pub requires_attr: Option<&'doc str>,
+    pub author:        Option<&'doc str>,
+    pub contact:       Option<&'doc str>,
+    pub supported:     Option<&'doc str>,
+    pub requires:      Vec<Vec<Require<'doc>>>,  // why nested like this?
+}
+
+impl<'doc> From<roxml::Node<'doc, '_>> for Extension<'doc> {
+    fn from(xml: roxml::Node<'doc, '_>) -> Self {
+        if xml.tag_name().name() != "extension" {
+            panic!("Expected 'extension', got {}", xml.tag_name().name());
+        }
+
+        let mut requires = Vec::new();
+        for child in xml.children() {
+            if child.node_type() == roxml::NodeType::Text { continue; }
+
+            let mut reqs = Vec::new();
+            for child in child.children() {
+                if child.node_type() == roxml::NodeType::Text { continue; }
+                if child.tag_name().name() == "comment" { continue; }
+                reqs.push(Require::from(child));
+            }
+            requires.push(reqs);
+        }
+
+        Self {
+            name:          xml.attribute("name").expect("Name attribute"),
+            number:        xml.attribute("number").expect("number"),
+            typ:           xml.attribute("type"),
+            requires_attr: xml.attribute("requires"),
+            author:        xml.attribute("author"),
+            contact:       xml.attribute("contact"),
+            supported:     xml.attribute("supported"),
+            requires,
+        }
+    }
+}
 
 // Dynamically dispatch all of these callbacks so that the user
 // doesn't have to specify an explict type for the callbacks that they
@@ -1595,6 +1635,7 @@ pub struct Callbacks<'doc> {
     on_command:            Option<Box<dyn FnMut(Command<'doc>) + 'doc>>,
     on_command_alias:      Option<Box<dyn FnMut(Alias<'doc>) + 'doc>>,
     on_feature:            Option<Box<dyn FnMut(Feature<'doc>) + 'doc>>,
+    on_extension:          Option<Box<dyn FnMut(Extension<'doc>) + 'doc>>,
 }
 
 impl<'doc> Callbacks<'doc> {
@@ -1709,6 +1750,13 @@ impl<'doc> Callbacks<'doc> {
             None     => (),
         }
     }
+
+    fn on_extension(&mut self, b: Extension<'doc>) {
+        match &mut self.on_extension {
+            Some(cb) => cb(b),
+            None     => (),
+        }
+    }
 }
 
 pub struct Parser<'doc, 'input> {
@@ -1737,6 +1785,7 @@ impl<'doc, 'input> Parser<'doc, 'input> {
                 on_command:            None,
                 on_command_alias:      None,
                 on_feature:            None,
+                on_extension:          None,
             }
         }
     }
@@ -1869,20 +1918,30 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         self
     }
 
+    pub fn on_extension<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(Extension<'doc>) + 'doc
+    {
+        self.callbacks.on_extension = Some(Box::new(f));
+        self
+    }
+
     pub fn parse_document(mut self) {
         let registry = self.document.root_element();
         for node in registry.children() {
-            // NOTE: some of the nodes are Text() whitespace between elements
+            if node.node_type() == roxml::NodeType::Text { continue; }
             match node.tag_name().name() {
                 // ignore all comments
-                "comment"   => continue,
-                "platforms" => self.parse_platforms(node),
-                "tags"      => self.parse_tags(node),
-                "types"     => self.parse_types(node),
-                "enums"     => self.parse_enums(node), // many of these
-                "commands"  => self.parse_commands(node),
-                "feature"   => self.parse_feature(node), // many of these
-                _           => continue,
+                "comment"    => continue,
+                "platforms"  => self.parse_platforms(node),
+                "tags"       => self.parse_tags(node),
+                "types"      => self.parse_types(node),
+                "enums"      => self.parse_enums(node), // many of these
+                "commands"   => self.parse_commands(node),
+                "feature"    => self.parse_feature(node), // many of these
+                //"extension"  => self.parse_extension(node), // many of these
+                "extensions" => self.parse_extensions(node), // some sort of grouping
+                _            => panic!("unhandled tag name {}", node.tag_name().name()),
             }
         }
     }
@@ -2063,6 +2122,17 @@ impl<'doc, 'input> Parser<'doc, 'input> {
 
     fn parse_feature(&mut self, xml: roxml::Node<'doc, '_>) {
         self.callbacks.on_feature(Feature::from(xml))
+    }
+
+    fn parse_extension(&mut self, xml: roxml::Node<'doc, '_>) {
+        self.callbacks.on_extension(Extension::from(xml))
+    }
+
+    fn parse_extensions(&mut self, xml: roxml::Node<'doc, '_>) {
+        for extension in xml.children() {
+            if extension.node_type() == roxml::NodeType::Text { continue; }
+            self.parse_extension(extension);
+        }
     }
 }
 

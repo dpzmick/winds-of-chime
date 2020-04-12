@@ -10,7 +10,7 @@ use parser::*;
 use roxmltree as roxml;
 
 fn print<T: std::fmt::Debug>(t: T) {
-    println!("got {:?}", t);
+    println!("got {:#?}", t);
 }
 
 fn main() {
@@ -34,5 +34,7 @@ fn main() {
         .on_enum(print)
         .on_command(print)
         .on_command_alias(print)
+        .on_feature(print)
+        .on_extension(print)
         .parse_document();
 }
