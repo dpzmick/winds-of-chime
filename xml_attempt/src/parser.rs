@@ -2068,4 +2068,3 @@ impl<'doc, 'input> Parser<'doc, 'input> {
 
 // FIXME all of the ctors should check that the thing they were passed was actually the right tag
 // FIXME test the actual parser, make sure it delivers the right callbacks (this should be done as a regression test maybe)
-// FIXME convert all errors into panics!. nothing is recoverable and this is a dev tool
