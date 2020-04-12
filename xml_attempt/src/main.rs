@@ -29,7 +29,7 @@ fn main() {
         .on_handle_alias(print)
         .on_enum_definition(print)
         .on_enum_alias(print)
-        // .on_function_pointer(print)
+        .on_function_pointer(print)
         .on_struct(print)
         .on_union(print)
         .on_enum(print)

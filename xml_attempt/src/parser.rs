@@ -550,6 +550,8 @@ pub struct FunctionPointer<'doc> {
     pub name:           &'doc str,
     pub return_type:    Type<'doc>,
     pub arguments:      Vec<(&'doc str, Type<'doc>)>,
+
+    // FIXME requires
 }
 
 impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
@@ -647,6 +649,15 @@ impl<'doc> TryFrom<roxml::Node<'doc, '_>> for FunctionPointer<'doc> {
         // ')(' literal
         let literal = children.next().ok_or(String::from("expected Text node for )( while parsing funcptr"))?;
         let mut literal = literal.text().ok_or(String::from("Expected literal to be Text"))?.trim_end();
+        if literal == ")(void);" {
+            // no args
+            return Ok(Self {
+                name,
+                return_type,
+                arguments: Vec::new(),
+            })
+        }
+
         if literal != ")(" {
             return Err(format!("Expected literal ')(\n', got {}", literal));
         }
@@ -758,6 +769,21 @@ mod test_function_pointer {
     }
 
     #[test]
+    fn test_noarg() {
+        let xml = r#"<type category="funcpointer">typedef void (VKAPI_PTR *<name>PFN_blah</name>)(void);</type>"#;
+        test::xml_test(xml, |node| {
+            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            assert_eq!(fptr.name, "PFN_blah");
+            assert_eq!(fptr.return_type, Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("void") )
+            });
+
+            assert_eq!(fptr.arguments.len(), 0);
+        });
+    }
+
+    #[test]
     fn test_returned_pointer() {
         let xml = r#"<type category="funcpointer">typedef void* (VKAPI_PTR *<name>PFN_blah</name>)(
   <type>uint32_t</type>  arg1,
@@ -815,6 +841,37 @@ mod test_function_pointer {
             assert_eq!(fptr.arguments[1], ("arg2", Type {
                 mutable: true,
                 ty:      Box::new( Types::Base("uint64_t") )
+            }));
+        });
+    }
+
+    #[test]
+    fn test_const() {
+        let xml = r#"<type category="funcpointer">typedef VkBool32 (VKAPI_PTR *<name>PFN_vkDebugReportCallbackEXT</name>)(
+    <type>VkDebugReportFlagsEXT</type>                       flags,
+    <type>VkDebugReportObjectTypeEXT</type>                  objectType,
+    <type>uint64_t</type>                                    object,
+    <type>size_t</type>                                      location,
+    <type>int32_t</type>                                     messageCode,
+    const <type>char</type>*                                 pLayerPrefix,
+    const <type>char</type>*                                 pMessage,
+    <type>void</type>*                                       pUserData);</type>"#;
+
+        test::xml_test(xml, |node| {
+            let fptr = FunctionPointer::try_from(node).expect("Should not fail");
+            assert_eq!(fptr.name, "PFN_vkDebugReportCallbackEXT");
+            assert_eq!(fptr.return_type, Type {
+                mutable: true,
+                ty:      Box::new( Types::Base("VkBool32") )
+            });
+
+            assert_eq!(fptr.arguments.len(), 8);
+            assert_eq!(fptr.arguments[5], ("pLayerPrefix", Type {
+                mutable: true,
+                ty: Box::new( Types::Pointer( Type {
+                    mutable: false,
+                    ty: Box::new( Types::Base("char") )
+                }))
             }));
         });
     }
@@ -1824,8 +1881,8 @@ impl<'doc, 'input> Parser<'doc, 'input> {
         }
     }
 
-    fn parse_funcpointer(&mut self, _xml_type: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
-        // FIXME implement
+    fn parse_funcpointer(&mut self, xml: roxml::Node<'doc, '_>) -> Result<(), ParserError> {
+        self.callbacks.on_function_pointer(FunctionPointer::try_from(xml)?);
         Ok(())
     }
 
