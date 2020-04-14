@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "xml_attempt"
+name = "vkxml"
 version = "0.1.0"
 dependencies = [
  "roxmltree",

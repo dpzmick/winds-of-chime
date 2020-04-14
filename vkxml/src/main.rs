@@ -1,6 +1,5 @@
 extern crate roxmltree;
 
-mod helpers;
 mod parser;
 
 // ours
@@ -9,13 +8,27 @@ use parser::*;
 // crates
 use roxmltree as roxml;
 
+// stdlib
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+
+pub fn get_file_contents<P: AsRef<Path>>(filename: P) -> std::io::Result<String> {
+    let mut f = File::open(filename)?;
+
+    let mut contents = String::new();
+    f.read_to_string(&mut contents)?;
+
+    Ok(contents)
+}
+
 fn print<T: std::fmt::Debug>(t: T) {
     println!("got {:#?}", t);
 }
 
 fn main() {
     let filename = "vk.xml";
-    let contents = helpers::get_file_contents(filename).expect("file");
+    let contents = get_file_contents(filename).expect("file");
     let doc = roxml::Document::parse(&contents).expect("xml");
 
     Parser::for_document(&doc)
