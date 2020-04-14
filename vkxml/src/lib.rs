@@ -263,9 +263,9 @@ mod test_platform {
 /// Vendor/Author tags
 #[derive(Debug)]
 pub struct TagDefinition<'a> {
-    name:    &'a str,
-    author:  &'a str,
-    contact: &'a str,
+    pub name:    &'a str,
+    pub author:  &'a str,
+    pub contact: &'a str,
 }
 
 impl<'a> From<roxml::Node<'a, '_>> for TagDefinition<'a> {

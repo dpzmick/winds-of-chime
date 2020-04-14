@@ -198,6 +198,7 @@ pub struct VulkanName {
 }
 
 impl VulkanName {
+    // FIXME hashset should be of &str?
     pub fn new(vkname: &str, exts: &HashSet<String>) -> Self {
         // names are of form VkSomethingSomethingOPTEXT
         #[derive(PartialEq)]

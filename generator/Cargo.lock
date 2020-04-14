@@ -4,86 +4,27 @@
 name = "generator"
 version = "0.1.0"
 dependencies = [
- "vk-parse",
  "vkxml",
 ]
 
 [[package]]
-name = "proc-macro2"
-version = "1.0.9"
+name = "roxmltree"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c09721c6781493a2a492a96b5a5bf19b65917fe6728884e7c44dd0c60ca3435"
+checksum = "99d696b20b92d3e02e08fd8456f0ab03007c99e6b111a6205b9cb6fc044d0957"
 dependencies = [
- "unicode-xid",
-]
-
-[[package]]
-name = "quote"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bdc6c187c65bca4260c9011c9e3132efe4909da44726bad24cf7572ae338d7f"
-dependencies = [
- "proc-macro2",
-]
-
-[[package]]
-name = "serde"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "414115f25f818d7dfccec8ee535d76949ae78584fc4f79a6f45a904bf8ab4449"
-
-[[package]]
-name = "serde_derive"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "128f9e303a5a29922045a830221b8f78ec74a5f544944f3d5984f8ec3895ef64"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "syn"
-version = "1.0.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "123bd9499cfb380418d509322d7a6d52e5315f064fe4b3ad18a53d6b92c07859"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-xid",
-]
-
-[[package]]
-name = "unicode-xid"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
-
-[[package]]
-name = "vk-parse"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9c0f5ecd44af3e23f32d045a851347c82b5ef1436477fda682985a39c655551"
-dependencies = [
- "serde",
- "serde_derive",
- "vkxml",
- "xml-rs",
+ "xmlparser",
 ]
 
 [[package]]
 name = "vkxml"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fbdf8c223c0ca5d1fbe3aeb36bdeefa1ace6d475aa08b34747e7e9cf5e0d2ba"
+version = "0.1.0"
 dependencies = [
- "serde",
- "serde_derive",
+ "roxmltree",
 ]
 
 [[package]]
-name = "xml-rs"
-version = "0.8.0"
+name = "xmlparser"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
+checksum = "ccb4240203dadf40be2de9369e5c6dec1bf427528115b030baca3334c18362d7"
