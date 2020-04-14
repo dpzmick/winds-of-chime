@@ -7,6 +7,11 @@
 // crates
 use roxmltree as roxml;
 
+// stdlib
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1759,15 +1764,35 @@ impl<'doc> Callbacks<'doc> {
     }
 }
 
+/// Useful helper function
+pub fn get_file_contents<P: AsRef<Path>>(filename: P) -> std::io::Result<String> {
+    let mut f = File::open(filename)?;
+
+    let mut contents = String::new();
+    f.read_to_string(&mut contents)?;
+
+    Ok(contents)
+}
+
+/// Wrapper type over underlying XML library's Document type
+pub struct Document<'input>(roxml::Document<'input>);
+
+impl<'input> Document<'input> {
+    /// panics on failure to parse
+    pub fn for_file_contents(contents: &'input str) -> Self {
+        Self(roxml::Document::parse(contents).expect("xml"))
+    }
+}
+
 pub struct Parser<'doc, 'input> {
     document:  &'doc roxml::Document<'input>,
     callbacks: Callbacks<'doc>
 }
 
 impl<'doc, 'input> Parser<'doc, 'input> {
-    pub fn for_document(document: &'doc roxml::Document<'input>) -> Self {
+    pub fn for_document(document: &'doc Document<'input>) -> Self {
         Self {
-            document,
+            document: &document.0,
             callbacks: Callbacks {
                 on_platform:           None,
                 on_tag:                None,
