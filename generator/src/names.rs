@@ -97,7 +97,7 @@ impl VulkanName {
         .collect::<Vec<_>>();
 
         let mut name_parts = parts.iter().filter(|&part| {
-            part != "Flag" && part != "Bits"
+            part != "Bits"
         })
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
