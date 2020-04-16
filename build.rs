@@ -1,5 +1,3 @@
-extern crate bindgen;
-
 use std::env;
 use std::fs;
 use std::path;
@@ -71,29 +69,6 @@ fn compile_shaders(shaders: &[(path::PathBuf, ShaderStage)])
 
 fn create_vulkan_bindings()
 {
-    let vk = bindgen::Builder::default()
-        .header("/usr/include/vulkan/vulkan_core.h")
-        .default_enum_style(bindgen::EnumVariation::NewType{ is_bitfield: false })
-        .whitelist_type("Vk.*")
-        .bitfield_enum("VkFlags")
-        .layout_tests(false)
-        .derive_copy(false)
-        .derive_default(false)
-        .derive_hash(false)
-        .derive_debug(true)
-        .generate()
-        .expect("Unable to generate vulkan bindings");
-
-    // vulkan has one giant bit mask call VkFlags
-    // all flags are a member of this, but only some flags apply
-    // to some situations
-    // we need to somehow generate the single massive VkFlags enum
-
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
-    let out_path = path::PathBuf::from(env::var("OUT_DIR").unwrap());
-    vk
-        .write_to_file(out_path.join("vk_bindgen.rs"))
-        .expect("Couldn't write bindings!");
 }
 
 fn main() {

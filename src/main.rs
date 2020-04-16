@@ -1,5 +1,4 @@
 extern crate winit;
-extern crate vk_functions;
 extern crate bitflags;
 
 mod test;
@@ -7,6 +6,7 @@ mod dynamic_library;
 mod macros;
 //mod sys;
 //mod vk;
+mod bf;
 
 use dynamic_library::DynamicLibrary;
 

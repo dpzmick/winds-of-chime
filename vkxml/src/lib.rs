@@ -512,7 +512,7 @@ mod test_handle {
 
 #[derive(Debug)]
 pub struct EnumDefinition<'doc> {
-    name: &'doc str,
+    pub name: &'doc str,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1249,7 +1249,7 @@ mod test_enum_value {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum EnumType {
     APIConstants, // special case
     Enum,
