@@ -1,7 +1,5 @@
 #pragma once
 
-#include "option.h"
-
 #include "volk.h"
 
 typedef struct app app_t;

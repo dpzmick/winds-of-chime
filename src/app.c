@@ -1,9 +1,9 @@
 #include "app.h"
 #include "common.h"
 #include "log.h"
-#include "option.h"
 
 #include "volk.h"
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
