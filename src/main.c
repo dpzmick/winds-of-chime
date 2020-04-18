@@ -14,12 +14,12 @@ debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
                 const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                 void*                                       pUserData)
 {
-  LOG_INFO( "Vulkan Message: %s", pCallbackData->pMessage );
+  LOG_ERROR( "Vulkan Message: %s", pCallbackData->pMessage );
   return VK_FALSE;
 }
 
 static char const * enabled_layer_names[] = {
-                                             //"VK_LAYER_LUNARG_standard_validation",
+  "VK_LAYER_LUNARG_standard_validation",
 };
 
 static char const * enabled_ext_names[] = {

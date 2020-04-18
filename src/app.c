@@ -42,7 +42,27 @@ open_device( app_t *          app,
     FATAL( "Failed to create device" );
   }
 
+  volkLoadDevice( device );
+
   app->device = device;
+}
+
+static void
+open_memory( VkDeviceMemory* memory,
+             VkDevice        device,
+             uint32_t        memory_type_idx )
+{
+  VkMemoryAllocateInfo info[] = {{
+      .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext           = NULL,
+      .allocationSize  = 4ul * 1024ul * 1024ul,
+      .memoryTypeIndex = memory_type_idx,
+  }};
+
+  VkResult res = vkAllocateMemory( device, info, NULL, memory );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to allocate memory on device, ret=%d", res );
+  }
 }
 
 void
@@ -59,7 +79,8 @@ app_init( app_t*     app,
 
   LOG_INFO( "Found %u physical devices", physical_device_count );
 
-  VkPhysicalDevice* physical_devices = malloc( physical_device_count * sizeof( VkPhysicalDevice ) );
+  size_t sz = physical_device_count * sizeof( VkPhysicalDevice );
+  VkPhysicalDevice* physical_devices = malloc( sz );
   if( UNLIKELY( physical_devices == NULL ) ) {
     FATAL( "Failed to allocate physical devices" );
   }
@@ -96,14 +117,13 @@ app_init( app_t*     app,
 
     /* Look for all of the memories that are required. */
 
-    VkMemoryPropertyFlagBits memory_flags[3] = {
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,      /* need one coherent mem */
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,       /* one device local */
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,       /* need something to transfer from */
+    VkMemoryPropertyFlagBits memory_flags[2] = {
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     };
 
-    uint32_t memory_idx[3] = { 0, 0, 0 };
-    bool     found_mem[3]  = { false, false, false };
+    uint32_t memory_idx[2] = { 0, 0 };
+    bool     found_mem[2]  = { false, false };
 
     VkPhysicalDeviceMemoryProperties mem_props[1];
     vkGetPhysicalDeviceMemoryProperties( dev, mem_props );
@@ -125,13 +145,22 @@ app_init( app_t*     app,
     }
 
     bool found_memories = true;
-    for( size_t j = 0; j < 3; ++j ) found_memories = found_memories && found_mem[j];
+    for( size_t j = 0; j < 2; ++j ) found_memories = found_memories && found_mem[j];
 
     if( LIKELY( found_queue && found_memories ) ) {
-      LOG_INFO( "Found memories at idxs { %u, %u, %u }",
-                memory_idx[0], memory_idx[1], memory_idx[2] );
+      LOG_INFO( "Found memories at idxs { %u, %u  }",
+                memory_idx[0], memory_idx[1] );
       LOG_INFO( "Tranfer queue at idx %u", transfer_queue );
+
       open_device( app, dev, transfer_queue );
+      open_memory( &app->host_memory, app->device, memory_idx[0] );
+      open_memory( &app->device_memory, app->device, memory_idx[1] );
+
+      /* FIXME */
+      /* create a shader that copies memory from one region to another */
+      /* do precise timings of the latency for a copy */
+      /* get this running on intel GPU */
+
       found_device = true;
       break;
     }
@@ -157,12 +186,13 @@ app_destroy( app_t* app )
 {
   if( !app ) return;
 
+  vkFreeMemory( app->device, app->host_memory, NULL );
+  vkFreeMemory( app->device, app->device_memory, NULL );
   vkDestroyDevice( app->device, NULL );
 }
 
 void
 app_run( app_t* app )
 {
-  
-}
 
+}

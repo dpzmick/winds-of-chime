@@ -6,9 +6,12 @@ typedef struct app app_t;
 
 struct app
 {
+  float      queue_priority[1];
   VkInstance instance;           // borrow
   VkDevice   device;             // owned
-  float      queue_priority[1];
+
+  VkDeviceMemory host_memory;
+  VkDeviceMemory device_memory;
 };
 
 void
