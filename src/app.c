@@ -5,7 +5,45 @@
 #include "volk.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+
+#define MEMORY_SIZE (4ul * 1024ul * 1024ul)
+
+static char*
+read_entire_file( char const* filename,
+                  size_t*     out_bytes )
+{
+  size_t mem_used  = 0;
+  size_t mem_space = 4096;
+  char*  buffer    = malloc( mem_space );
+  if( !buffer ) FATAL( "Failed to allocate memory" );
+
+  FILE* f = fopen( filename, "r" );
+  if( !f ) FATAL( "Failed to open file %s", filename );
+
+  while( 1 ) {
+    size_t to_read = mem_space-mem_used;
+    size_t n_read = fread( buffer+mem_used, 1, to_read, f );
+    mem_used += n_read;
+
+    if( n_read < to_read ) {
+      if( feof( f ) ) {
+        fclose( f );
+        *out_bytes = mem_used;
+        return buffer;
+      }
+      else {
+        FATAL( "Failed to read file errno=%d", ferror( f ) );
+      }
+    }
+
+    // we need a larger buffer
+    mem_space = mem_space*2;
+    buffer = realloc( buffer, mem_space );
+    if( !buffer ) FATAL( "Failed to allocate memory" );
+  }
+}
 
 static void
 open_device( app_t *          app,
@@ -55,13 +93,24 @@ open_memory( VkDeviceMemory* memory,
   VkMemoryAllocateInfo info[] = {{
       .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
       .pNext           = NULL,
-      .allocationSize  = 4ul * 1024ul * 1024ul,
+      .allocationSize  = MEMORY_SIZE,
       .memoryTypeIndex = memory_type_idx,
   }};
 
   VkResult res = vkAllocateMemory( device, info, NULL, memory );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to allocate memory on device, ret=%d", res );
+  }
+}
+
+static void
+map_memory( void**         map_to,
+            VkDevice       device,
+            VkDeviceMemory memory )
+{
+  VkResult res = vkMapMemory( device, memory, 0, MEMORY_SIZE, 0, map_to );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to map memory" );
   }
 }
 
@@ -115,15 +164,8 @@ app_init( app_t*     app,
       }
     }
 
-    /* Look for all of the memories that are required. */
-
-    VkMemoryPropertyFlagBits memory_flags[2] = {
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-    };
-
-    uint32_t memory_idx[2] = { 0, 0 };
-    bool     found_mem[2]  = { false, false };
+    uint32_t memory_idx = 0;
+    bool     found_mem  = false;
 
     VkPhysicalDeviceMemoryProperties mem_props[1];
     vkGetPhysicalDeviceMemoryProperties( dev, mem_props );
@@ -131,43 +173,30 @@ app_init( app_t*     app,
     uint32_t            n_mem = mem_props->memoryTypeCount;
     VkMemoryType const* mt    = mem_props->memoryTypes;
     for( uint32_t j = 0; j < n_mem; ++j ) {
-      VkMemoryType mem = mt[j];
-
-      for( size_t target = 0; target < ARRAY_SIZE( memory_idx ); ++target ) {
-        if( found_mem[target] ) continue;
-        if( mem.propertyFlags & memory_flags[target] ) {
-          /* found one */
-
-          memory_idx[target] = j;
-          found_mem[target] = true;
-        }
+      if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) {
+        memory_idx = j;
+        found_mem = true;
+        break;
       }
     }
 
-    bool found_memories = true;
-    for( size_t j = 0; j < 2; ++j ) found_memories = found_memories && found_mem[j];
-
-    if( LIKELY( found_queue && found_memories ) ) {
-      LOG_INFO( "Found memories at idxs { %u, %u  }",
-                memory_idx[0], memory_idx[1] );
+    if( LIKELY( found_queue && found_mem ) ) {
+      LOG_INFO( "Found memory at idx %u", memory_idx );
       LOG_INFO( "Tranfer queue at idx %u", transfer_queue );
 
       open_device( app, dev, transfer_queue );
-      open_memory( &app->host_memory, app->device, memory_idx[0] );
-      open_memory( &app->device_memory, app->device, memory_idx[1] );
+      open_memory( &app->coherent_memory, app->device, memory_idx );
+      map_memory( &app->mapped_memory, app->device, app->coherent_memory );
 
-      /* FIXME */
-      /* create a shader that copies memory from one region to another */
-      /* do precise timings of the latency for a copy */
-      /* get this running on intel GPU */
+      /* create a shader and expose the buffer */
 
       found_device = true;
       break;
     }
     else {
       LOG_INFO( "Device %u not valid. found memory? %s found_queue %s", i,
-                ( found_memories ? "YES" : "NO" ),
-                ( found_queue    ? "YES" : "NO" ) );
+                ( found_mem   ? "YES" : "NO" ),
+                ( found_queue ? "YES" : "NO" ) );
 
     }
 
@@ -179,6 +208,30 @@ app_init( app_t*     app,
   }
 
   free( physical_devices );
+
+  // continue init
+  size_t shader_bytes = 0;
+  char* shader_contents = read_entire_file( "src/shader.spv", &shader_bytes );
+  if( shader_bytes % sizeof( uint32_t ) != 0 ) {
+    FATAL( "Shader is the wrong size, should be uint32_t multiple" );
+  }
+
+  LOG_INFO( "Loaded shader, size=%zu", shader_bytes );
+
+  VkShaderModuleCreateInfo screate[] = {{
+      .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .pNext    = NULL,
+      .flags    = 0,
+      .codeSize = shader_bytes,
+      .pCode    = (uint32_t const*)shader_contents,
+  }};
+
+  res = vkCreateShaderModule( app->device, screate, NULL, &app->shader );
+  if( res != VK_SUCCESS ) {
+    FATAL( "Failed to create shader module ret=%d", res );
+  }
+
+  free( shader_contents );
 }
 
 void
@@ -186,8 +239,9 @@ app_destroy( app_t* app )
 {
   if( !app ) return;
 
-  vkFreeMemory( app->device, app->host_memory, NULL );
-  vkFreeMemory( app->device, app->device_memory, NULL );
+  vkDestroyShaderModule( app->device, app->shader, NULL );
+  vkUnmapMemory( app->device, app->coherent_memory );
+  vkFreeMemory( app->device, app->coherent_memory, NULL );
   vkDestroyDevice( app->device, NULL );
 }
 

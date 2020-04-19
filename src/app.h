@@ -8,10 +8,15 @@ struct app
 {
   float      queue_priority[1];
   VkInstance instance;           // borrow
-  VkDevice   device;             // owned
+  VkDevice   device;
 
-  VkDeviceMemory host_memory;
-  VkDeviceMemory device_memory;
+  /* Host/Device coherant memory of some sort */
+  VkDeviceMemory coherent_memory;
+
+  /* the above memory mapped into cpu address space */
+  void*          mapped_memory;
+
+  VkShaderModule shader;
 };
 
 void
