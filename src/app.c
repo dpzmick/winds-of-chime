@@ -383,7 +383,7 @@ app_init( app_t*     app,
   }};
 
   VkDescriptorBufferInfo out_info[] = {{
-      .buffer = app->in_buffer,
+      .buffer = app->out_buffer,
       .offset = 0,
       .range = VK_WHOLE_SIZE,
   }};
@@ -518,15 +518,14 @@ app_run( app_t* app )
     FATAL( "Failed to create fence, res=%d", res );
   }
 
-  // *(uint8_t*)(app->mapped_memory) = 9;
-
+  uint32_t volatile* mem = (uint32_t volatile*)((char*)app->mapped_memory);
   uint64_t start = rdtscp();
 
   vkQueueSubmit( app->queue, 1, submit_info, fence );
 
   /* while( true ) { */
-  /*   uint8_t const volatile* loc = (uint8_t const*)(app->mapped_memory) + 2ul*1024ul*1024ul; */
-  /*   if( *loc == 9 ) break; */
+  /*   uint32_t const volatile* loc = mem + N_INTS; */
+  /*   if( *loc == 1 ) break; */
   /* } */
 
   res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 10000000000 );
@@ -537,10 +536,10 @@ app_run( app_t* app )
   uint64_t finish = rdtscp();
   LOG_INFO( "start=%zu finish=%zu, dt=%zu", start, finish, finish-start );
 
-  uint32_t volatile* out = (uint32_t volatile*)((char*)app->mapped_memory + 2ul*1024ul*1024ul);
-  for( size_t i = 0; i < N_INTS; ++i ) {
-    LOG_INFO( "[%zu] = %u", i, out[i] );
-  }
+  /* uint32_t volatile* mem = (uint32_t volatile*)((char*)app->mapped_memory); */
+  /* for( size_t i = 0; i < N_INTS*2; ++i ) { */
+  /*   LOG_INFO( "[%zu] = %u", i, mem[i] ); */
+  /* } */
 
   vkDestroyFence( app->device, fence, NULL );
 }
