@@ -441,30 +441,6 @@ app_init( app_t*     app,
     FATAL( "Failed to allocate command buffers" );
   }
 
-  VkCommandBufferBeginInfo cbbi[] = {{
-      .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-      .pNext            = NULL,
-      .flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-      .pInheritanceInfo = NULL,
-  }};
-
-  /* Begin recording the command buffer */
-  res = vkBeginCommandBuffer( app->cmd_buffer, cbbi );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to begin command buffer" );
-  }
-
-  vkCmdBindPipeline( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->pipeline );
-  vkCmdBindDescriptorSets( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->playout, 0, 1, &app->dset, 0, NULL );
-  vkCmdDispatch( app->cmd_buffer, N_INTS, 1, 1 );
-
-  res = vkEndCommandBuffer( app->cmd_buffer );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to end command buffer" );
-  }
-
-  // sizes given to the shader, how do I keep these in sync?
-  // overall, vulkan doesn't seem to be like a great way to do compute work..
 }
 
 void
@@ -495,10 +471,34 @@ rdtscp( void )
   return (uint64_t)lo | ( (uint64_t)hi << 32 );
 }
 
-void
-app_run( app_t* app )
+__attribute__((noinline))
+static uint64_t
+run_once( app_t*  app,
+          VkFence fence )
 {
-  // submit the command once
+  // record a command
+  VkCommandBufferBeginInfo cbbi[] = {{
+      .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .pNext            = NULL,
+      .flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+      .pInheritanceInfo = NULL,
+  }};
+
+  /* Begin recording the command buffer */
+  VkResult res = vkBeginCommandBuffer( app->cmd_buffer, cbbi );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to begin command buffer" );
+  }
+
+  vkCmdBindPipeline( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->pipeline );
+  vkCmdBindDescriptorSets( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->playout, 0, 1, &app->dset, 0, NULL );
+  vkCmdDispatch( app->cmd_buffer, N_INTS, 1, 1 );
+
+  res = vkEndCommandBuffer( app->cmd_buffer );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to end command buffer" );
+  }
+
   VkSubmitInfo submit_info[] = {{
       .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
       .pNext              = NULL,
@@ -506,6 +506,30 @@ app_run( app_t* app )
       .pCommandBuffers    = &app->cmd_buffer,
   }};
 
+  uint32_t volatile*       mem = app->mapped_memory;
+  uint32_t const volatile* loc = mem + N_INTS;
+
+  uint64_t start = rdtscp();
+  vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
+
+  // FIXME check asm
+  uint64_t finish = 0;
+  while( true ) {
+    if( LIKELY( *loc == 1 ) ) break;
+  }
+  finish = rdtscp();
+
+  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 10000000000 );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to wait for fence" );
+  }
+
+  return finish-start;
+}
+
+void
+app_run( app_t* app )
+{
   VkFenceCreateInfo fci[] = {{
       .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
       .pNext = NULL,
@@ -518,28 +542,16 @@ app_run( app_t* app )
     FATAL( "Failed to create fence, res=%d", res );
   }
 
-  uint32_t volatile* mem = (uint32_t volatile*)((char*)app->mapped_memory);
-  uint64_t start = rdtscp();
-
-  vkQueueSubmit( app->queue, 1, submit_info, fence );
-
-  /* while( true ) { */
-  /*   uint32_t const volatile* loc = mem + N_INTS; */
-  /*   if( *loc == 1 ) break; */
-  /* } */
-
-  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 10000000000 );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to wait for fence" );
+  uint64_t trials[1024];
+  for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
+    trials[i] = run_once( app, fence );
   }
 
-  uint64_t finish = rdtscp();
-  LOG_INFO( "start=%zu finish=%zu, dt=%zu", start, finish, finish-start );
-
-  /* uint32_t volatile* mem = (uint32_t volatile*)((char*)app->mapped_memory); */
-  /* for( size_t i = 0; i < N_INTS*2; ++i ) { */
-  /*   LOG_INFO( "[%zu] = %u", i, mem[i] ); */
-  /* } */
-
   vkDestroyFence( app->device, fence, NULL );
+
+  static uint64_t tsc_freq_khz = 3892231;
+  double          ns_per_cycle = (double)(tsc_freq_khz * 1000)/1e9;
+  for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
+    fprintf( stderr, "%f\n", (double)trials[i]*ns_per_cycle );
+  }
 }
