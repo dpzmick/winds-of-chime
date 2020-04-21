@@ -551,7 +551,8 @@ app_run( app_t* app )
 
   vkDestroyFence( app->device, fence, NULL );
 
-  static uint64_t tsc_freq_khz = 3892231;
+  // static uint64_t tsc_freq_khz = 3892231; // AMD
+  static uint64_t tsc_freq_khz = 2099944; // intel
   double          ns_per_cycle = (double)(tsc_freq_khz * 1000)/1e9;
   for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
     fprintf( stderr, "%f\n", (double)trials[i]*ns_per_cycle );

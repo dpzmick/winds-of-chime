@@ -36,7 +36,7 @@ static VkInstanceCreateInfo instance_create_info[1] = {{
     .pApplicationName = "winds of chime",
     .pEngineName      = "custom",
     .engineVersion    = 1,
-    .apiVersion       = 1,
+    .apiVersion       = VK_MAKE_VERSION(1, 2, 0),
   },
   .enabledLayerCount       = ARRAY_SIZE( enabled_layer_names ),
   .ppEnabledLayerNames     = enabled_layer_names,
