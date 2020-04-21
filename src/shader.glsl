@@ -27,5 +27,12 @@ void main() {
   // for
   uvec3 me = gl_WorkGroupID;   // we are only using x
   // out_buf.data[ me[0] ] = in_buf.data[ me[0] ];
-  out_buf.data[ me[0] ] = 1;
+
+  // wait for the signal
+  while( true ) {
+    if( in_buf.data[0] == 1 ) break;
+  }
+
+  // send the write
+  out_buf.data[ me[0] ] = 2;
 }

@@ -509,15 +509,17 @@ run_once( app_t*  app,
   uint32_t volatile*       mem = app->mapped_memory;
   uint32_t const volatile* loc = mem + N_INTS;
 
-  uint64_t start = rdtscp();
   vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
 
-  // FIXME check asm
-  uint64_t finish = 0;
+  *mem = 1;
+  uint64_t start = rdtscp();
+
+  // wait for the two
   while( true ) {
-    if( LIKELY( *loc == 1 ) ) break;
+    if( LIKELY( *loc == 2 ) ) break;
   }
-  finish = rdtscp();
+
+  uint64_t finish = rdtscp();
 
   res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 10000000000 );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
