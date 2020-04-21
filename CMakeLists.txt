@@ -8,5 +8,8 @@ string(APPEND CMAKE_C_FLAGS " -fvisibility=hidden -fstrict-aliasing")
 string(APPEND CMAKE_C_FLAGS " -O3 -march=native -mtune=native")
 string(APPEND CMAKE_C_FLAGS " -flto")
 
+find_package(glfw3 REQUIRED)
+
+set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
 add_subdirectory(third-party)
 add_subdirectory(src)

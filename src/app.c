@@ -3,6 +3,8 @@
 #include "log.h"
 
 #include "volk.h"
+
+#include <GLFW/glfw3.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -419,7 +421,7 @@ app_init( app_t*     app,
   VkCommandPoolCreateInfo cmdpci[] = {{
       .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
       .pNext            = NULL,
-      .flags            = 0,
+      .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
       .queueFamilyIndex = app->compute_queue_idx,
   }};
 
@@ -547,6 +549,10 @@ app_run( app_t* app )
   uint64_t trials[1024];
   for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
     trials[i] = run_once( app, fence );
+    res = vkResetFences( app->device, 1, &fence );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to reset fence" );
+    }
   }
 
   vkDestroyFence( app->device, fence, NULL );
@@ -555,6 +561,6 @@ app_run( app_t* app )
   // static uint64_t tsc_freq_khz = 2099944; // intel
   double          ns_per_cycle = (double)(tsc_freq_khz * 1000)/1e9;
   for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
-    fprintf( stderr, "%f\n", (double)trials[i]*ns_per_cycle );
+    printf( "%f\n", (double)trials[i]*ns_per_cycle );
   }
 }

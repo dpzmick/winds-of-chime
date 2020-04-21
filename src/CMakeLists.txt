@@ -9,4 +9,7 @@ add_custom_command(
 add_custom_target(shader ALL DEPENDS ${shader_dst})
 
 add_executable(main common.c log.c app.c main.c)
-target_link_libraries(main volk)
+target_link_libraries(main volk glfw)
+
+add_executable(test-glfw test-glfw.c)
+target_link_libraries(test-glfw vulkan glfw)
