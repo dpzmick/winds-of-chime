@@ -511,7 +511,7 @@ run_once( app_t*  app,
 
   vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
 
-  *mem = 1;
+  *mem = 1; // trigger the write
   uint64_t start = rdtscp();
 
   // wait for the two
