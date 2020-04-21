@@ -492,7 +492,7 @@ run_once( app_t*  app,
 
   vkCmdBindPipeline( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->pipeline );
   vkCmdBindDescriptorSets( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->playout, 0, 1, &app->dset, 0, NULL );
-  vkCmdDispatch( app->cmd_buffer, N_INTS, 1, 1 );
+  vkCmdDispatch( app->cmd_buffer, 1, 1, 1 ); // run exactly one shader
 
   res = vkEndCommandBuffer( app->cmd_buffer );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
@@ -551,8 +551,8 @@ app_run( app_t* app )
 
   vkDestroyFence( app->device, fence, NULL );
 
-  // static uint64_t tsc_freq_khz = 3892231; // AMD
-  static uint64_t tsc_freq_khz = 2099944; // intel
+  static uint64_t tsc_freq_khz = 3892231; // AMD
+  // static uint64_t tsc_freq_khz = 2099944; // intel
   double          ns_per_cycle = (double)(tsc_freq_khz * 1000)/1e9;
   for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
     fprintf( stderr, "%f\n", (double)trials[i]*ns_per_cycle );

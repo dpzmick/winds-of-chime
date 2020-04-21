@@ -34,5 +34,5 @@ void main() {
   }
 
   // send the write
-  out_buf.data[ me[0] ] = 2;
+  out_buf.data[0] = 2;
 }
