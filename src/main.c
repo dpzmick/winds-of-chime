@@ -21,11 +21,11 @@ debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
 }
 
 static char const * enabled_layer_names[] = {
-  "VK_LAYER_LUNARG_standard_validation",
+  //"VK_LAYER_LUNARG_standard_validation",
 };
 
 static char const * enabled_ext_names[] = {
-  VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+  //VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
 };
 
 static VkInstanceCreateInfo instance_create_info[1] = {{
@@ -67,14 +67,14 @@ main()
   VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
   app_t                    app[1];
 
-  glfwInit();
+  // glfwInit();
 
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  GLFWwindow* window = glfwCreateWindow(800, 600, "Vulkan window", NULL, NULL);
+  // glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  // GLFWwindow* window = glfwCreateWindow(800, 600, "Vulkan window", NULL, NULL);
 
-  if( !glfwVulkanSupported() ) {
-    FATAL( "glfw+vulkan not supported" );
-  }
+  // if( !glfwVulkanSupported() ) {
+  //   FATAL( "glfw+vulkan not supported" );
+  // }
 
   uint32_t count;
   char const** ext = glfwGetRequiredInstanceExtensions(&count);
@@ -95,10 +95,10 @@ main()
 
   volkLoadInstance( instance );
 
-  res = vkCreateDebugUtilsMessengerEXT( instance, dbg_create_info, NULL, &messenger );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create debug messenger ret=%d", res );
-  }
+  // res = vkCreateDebugUtilsMessengerEXT( instance, dbg_create_info, NULL, &messenger );
+  // if( UNLIKELY( res != VK_SUCCESS ) ) {
+  //   FATAL( "Failed to create debug messenger ret=%d", res );
+  // }
 
   LOG_INFO( "Created vulkan instance successfully" );
 
@@ -106,7 +106,7 @@ main()
   app_run( app );
   app_destroy( app );
 
-  vkDestroyDebugUtilsMessengerEXT( instance, messenger, NULL );
+  // vkDestroyDebugUtilsMessengerEXT( instance, messenger, NULL );
   vkDestroyInstance( instance, NULL );
 
   return 0;

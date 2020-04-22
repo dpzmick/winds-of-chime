@@ -5,6 +5,7 @@
 #include "volk.h"
 
 #include <GLFW/glfw3.h>
+#include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -510,6 +511,8 @@ run_once( app_t*  app,
 
   uint32_t volatile*       mem = app->mapped_memory;
   uint32_t const volatile* loc = mem + N_INTS;
+
+  memset( (char*)mem, 0, MEMORY_SIZE );
 
   vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
 
