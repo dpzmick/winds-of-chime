@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #define LIKELY(cond)   (__builtin_expect(!!(cond), 1))
 #define UNLIKELY(cond) (__builtin_expect(!!(cond), 0))
 
@@ -15,3 +17,11 @@ fatal_impl( char const * file,
             int          line,
             char const*  fmt,
                          ... );
+
+static inline uint64_t
+rdtscp( void )
+{
+  uint32_t hi, lo;
+  __asm__ volatile( "rdtscp": "=a"(lo), "=d"(hi));
+  return (uint64_t)lo | ( (uint64_t)hi << 32 );
+}

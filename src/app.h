@@ -2,22 +2,29 @@
 
 #include "volk.h"
 
+// forward decl
+typedef struct GLFWwindow GLFWwindow;
+
 typedef struct app app_t;
 
 struct app
 {
-  float      queue_priority[1];
-  VkInstance instance;          // borrow
-  VkDevice   device;
-  uint32_t   compute_queue_idx;
-  VkQueue    queue;
+  VkInstance  instance;         // borrow
+  GLFWwindow* window;           // borrow
 
-  /* Host/Device coherant memory of some sort */
-  VkDeviceMemory coherent_memory;
+  float       queue_priority;
+  uint32_t    queue_idx;
+  VkQueue     queue;
+  VkDevice    device;
 
-  /* the above memory mapped into cpu address space */
-  void volatile* mapped_memory;
+  VkDeviceMemory host_memory;
+  void*          mapped_host_memory;
+  VkDeviceMemory device_memory;
 
+  VkCommandPool    cmd_pool;
+  VkDescriptorPool descriptor_pool;
+
+#if 0
   VkShaderModule shader;
 
   VkBuffer in_buffer;
@@ -28,19 +35,19 @@ struct app
   VkPipelineLayout      playout;
 
   VkPipeline pipeline;
-  VkDescriptorPool pool;
   VkDescriptorSet dset;
 
-  VkCommandPool   cmd_pool;
   VkCommandBuffer cmd_buffer;
+#endif
 };
 
 void
-app_init( app_t *    app,
-          VkInstance instance );
+app_init( app_t*      app,
+          VkInstance  instance,
+          GLFWwindow* window );
 
 void
-app_destroy( app_t * app );
+app_destroy( app_t* app );
 
 void
-app_run( app_t * app );
+app_run( app_t* app );
