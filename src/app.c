@@ -524,7 +524,7 @@ run_once( app_t*  app,
     if( LIKELY( *loc == 2 ) ) break;
     if( LIKELY( *loc == 3 ) ) {
       LOG_INFO( "Trial failed" );
-      break;
+      return 0;
     }
   }
 
