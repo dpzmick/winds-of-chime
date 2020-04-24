@@ -509,11 +509,11 @@ run_once( app_t*  app,
       .pCommandBuffers    = &app->cmd_buffer,
   }};
 
-  uint32_t volatile*       mem = app->mapped_memory;
-  uint32_t const volatile* loc = mem + N_INTS;
+  uint32_t volatile* mem = app->mapped_memory;
+  uint32_t volatile* loc = mem + N_INTS;
 
-  memset( (char*)mem, 0, MEMORY_SIZE );
-
+  *mem = 0;
+  *loc = 0;
   vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
 
   *mem = 1; // trigger the write
@@ -522,11 +522,15 @@ run_once( app_t*  app,
   // wait for the two
   while( true ) {
     if( LIKELY( *loc == 2 ) ) break;
+    if( LIKELY( *loc == 3 ) ) {
+      LOG_INFO( "Trial failed" );
+      break;
+    }
   }
 
   uint64_t finish = rdtscp();
 
-  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 10000000000 );
+  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 100000 );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to wait for fence" );
   }
@@ -559,9 +563,9 @@ app_run( app_t* app )
   }
 
   vkDestroyFence( app->device, fence, NULL );
-
-  // static uint64_t tsc_freq_khz = 3892231; // AMD
-  static uint64_t tsc_freq_khz = 2099944; // intel
+  
+  static uint64_t tsc_freq_khz = 3892231; // AMD
+  // static uint64_t tsc_freq_khz = 2099944; // intel
   double          ns_per_cycle = 1./((double)(tsc_freq_khz * 1000)/1e9);
   for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
     printf( "%f\n", (double)trials[i]*ns_per_cycle );
