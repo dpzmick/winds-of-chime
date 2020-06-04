@@ -5,11 +5,14 @@
 #include "volk.h"
 
 #include <GLFW/glfw3.h>
-#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define N_INTS      128ul
 #define BUFFER_SIZE ( N_INTS * sizeof( uint32_t ) )
@@ -24,25 +27,23 @@ read_entire_file( char const* filename,
   char*  buffer    = malloc( mem_space );
   if( UNLIKELY( !buffer ) ) FATAL( "Failed to allocate memory" );
 
-  // FIXME no reason for FILE* here, just use open
-  FILE* f = fopen( filename, "r" );
-  if( UNLIKELY( !f ) ) FATAL( "Failed to open file %s", filename );
+  int fd = open( filename, O_RDONLY );
+  if( UNLIKELY( fd < 0 ) ) FATAL( "Failed to open file %s", filename );
 
   while( 1 ) {
-    size_t to_read = mem_space-mem_used;
-    size_t n_read = fread( buffer+mem_used, 1, to_read, f );
-    mem_used += n_read;
-
-    if( n_read < to_read ) {
-      if( feof( f ) ) {
-        fclose( f );
-        *out_bytes = mem_used;
-        return buffer;
-      }
-      else {
-        FATAL( "Failed to read file errno=%d", ferror( f ) );
-      }
+    size_t  to_read = mem_space-mem_used;
+    ssize_t n_read  = read( fd, buffer+mem_used, to_read );
+    if( n_read < 0 ) {
+      FATAL( "Failed to read file errno=%d", errno );
     }
+
+    if( n_read == 0 ) {
+      close( fd );
+      *out_bytes = mem_used;
+      return buffer;
+    }
+
+    mem_used += (size_t)n_read;
 
     // we need a larger buffer
     mem_space = mem_space*2;
@@ -120,14 +121,20 @@ map_memory( void volatile** map_to,
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to map memory" );
   }
+}
 
-  /* // FIXME want this to be closer to the actual loop, testing */
-  /* // coherance latency after all */
-  /* size_t n = (2*1024*1024)/sizeof(uint32_t); */
-  /* uint32_t volatile* into = *map_to; */
-  /* for( size_t i = 0; i < n; ++i ) { */
-  /*   into[i] = (uint32_t)i; */
-  /* } */
+static void
+create_window( void )
+{
+  static bool called = false;
+  if( called ) FATAL( "This function can only be called once" );
+  called = true;
+
+  glfwInit();
+
+  if( !glfwVulkanSupported() ) {
+    FATAL( "GLFW doesn't support vulkan" );
+  }
 }
 
 void
@@ -135,6 +142,8 @@ app_init( app_t*     app,
           VkInstance instance )
 {
   VkResult res;
+
+  create_window();
 
   uint32_t physical_device_count = 0;
   res = vkEnumeratePhysicalDevices( instance, &physical_device_count, NULL );
