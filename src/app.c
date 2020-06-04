@@ -126,12 +126,6 @@ map_memory( void volatile** map_to,
 static void
 create_window( void )
 {
-  static bool called = false;
-  if( called ) FATAL( "This function can only be called once" );
-  called = true;
-
-  glfwInit();
-
   if( !glfwVulkanSupported() ) {
     FATAL( "GLFW doesn't support vulkan" );
   }
@@ -214,6 +208,7 @@ app_init( app_t*     app,
       map_memory( &app->mapped_memory, app->device, app->coherent_memory );
 
       found_device = true;
+      free( props );
       break;
     }
     else {
@@ -462,7 +457,7 @@ app_destroy( app_t* app )
 
   /* cmd_buffer? */
   vkDestroyCommandPool( app->device, app->cmd_pool, NULL );
-  /* dset? */
+  /* dset? */ // FIXME this is a leak
   vkDestroyDescriptorPool( app->device, app->pool, NULL );
   vkDestroyPipeline( app->device, app->pipeline, NULL );
   vkDestroyPipelineLayout( app->device, app->playout, NULL );
@@ -550,6 +545,8 @@ run_once( app_t*  app,
 void
 app_run( app_t* app )
 {
+  return;
+
   VkFenceCreateInfo fci[] = {{
       .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
       .pNext = NULL,
