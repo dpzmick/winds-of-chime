@@ -29,10 +29,13 @@ void main() {
   // out_buf.data[ me[0] ] = in_buf.data[ me[0] ];
 
   // wait for the signal
-  while( true ) {
-    if( in_buf.data[0] == 1 ) break;
+  for( int i = 0; i < 100; ++i ) {
+    if( in_buf.data[0] == 1 ) {
+      // send the write
+      out_buf.data[0] = 2;
+    }
   }
 
-  // send the write
-  out_buf.data[0] = 2;
+  // send the failure
+  out_buf.data[0] = 3;
 }

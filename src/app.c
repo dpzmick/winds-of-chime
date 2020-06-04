@@ -5,10 +5,14 @@
 #include "volk.h"
 
 #include <GLFW/glfw3.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define N_INTS      128ul
 #define BUFFER_SIZE ( N_INTS * sizeof( uint32_t ) )
@@ -23,25 +27,23 @@ read_entire_file( char const* filename,
   char*  buffer    = malloc( mem_space );
   if( UNLIKELY( !buffer ) ) FATAL( "Failed to allocate memory" );
 
-  // FIXME no reason for FILE* here, just use open
-  FILE* f = fopen( filename, "r" );
-  if( UNLIKELY( !f ) ) FATAL( "Failed to open file %s", filename );
+  int fd = open( filename, O_RDONLY );
+  if( UNLIKELY( fd < 0 ) ) FATAL( "Failed to open file %s", filename );
 
   while( 1 ) {
-    size_t to_read = mem_space-mem_used;
-    size_t n_read = fread( buffer+mem_used, 1, to_read, f );
-    mem_used += n_read;
-
-    if( n_read < to_read ) {
-      if( feof( f ) ) {
-        fclose( f );
-        *out_bytes = mem_used;
-        return buffer;
-      }
-      else {
-        FATAL( "Failed to read file errno=%d", ferror( f ) );
-      }
+    size_t  to_read = mem_space-mem_used;
+    ssize_t n_read  = read( fd, buffer+mem_used, to_read );
+    if( n_read < 0 ) {
+      FATAL( "Failed to read file errno=%d", errno );
     }
+
+    if( n_read == 0 ) {
+      close( fd );
+      *out_bytes = mem_used;
+      return buffer;
+    }
+
+    mem_used += (size_t)n_read;
 
     // we need a larger buffer
     mem_space = mem_space*2;
@@ -51,15 +53,12 @@ read_entire_file( char const* filename,
 }
 
 static void
-open_device( app_t*           app,
+open_device( app_t *          app,
              VkPhysicalDevice physical_device,
              uint32_t         queue_idx )
 {
-  VkResult res    = VK_SUCCESS;
-  VkDevice device = VK_NULL_HANDLE;
-
-  app->queue_priority = 1.0;
-  app->queue_idx      = queue_idx;
+  app->queue_priority[0] = 1.0;
+  app->compute_queue_idx = queue_idx;
 
   const VkDeviceQueueCreateInfo q_create[] = {{
       .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -67,7 +66,7 @@ open_device( app_t*           app,
       .flags            = 0,
       .queueFamilyIndex = queue_idx,
       .queueCount       = 1,
-      .pQueuePriorities = &app->queue_priority,
+      .pQueuePriorities = app->queue_priority,
   }};
 
   const VkDeviceCreateInfo device_c[] = {{
@@ -83,94 +82,62 @@ open_device( app_t*           app,
       .pEnabledFeatures        = NULL,
   }};
 
-  res = vkCreateDevice( physical_device, device_c, NULL, &app->device );
+  VkDevice device = VK_NULL_HANDLE;
+  VkResult res = vkCreateDevice( physical_device, device_c, NULL, &device );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to create device" );
   }
 
-  volkLoadDevice( app->device );
-  vkGetDeviceQueue( app->device, queue_idx, 0, &app->queue );
+  volkLoadDevice( device );
+
+  vkGetDeviceQueue( device, queue_idx, 0, &app->queue );
+  app->device = device;
 }
 
 static void
-create_pools( app_t* app )
+open_memory( VkDeviceMemory* memory,
+             VkDevice        device,
+             uint32_t        memory_type_idx )
 {
-  VkResult res = VK_SUCCESS;
-
-  VkCommandPoolCreateInfo cmdpci[] = {{
-      .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-      .pNext            = NULL,
-      .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-      .queueFamilyIndex = app->queue_idx,
-  }};
-
-  res = vkCreateCommandPool( app->device, cmdpci, NULL, &app->cmd_pool );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create command pool" );
-  }
-
-  VkDescriptorPoolSize dpool_sizes[] = {{
-      .type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      .descriptorCount = 2,
-  }};
-
-  VkDescriptorPoolCreateInfo dpci[] = {{
-      .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-      .pNext         = NULL,
-      .flags         = 0,
-      .maxSets       = 1,
-      .poolSizeCount = 1,
-      .pPoolSizes    = dpool_sizes,
-  }};
-
-  res = vkCreateDescriptorPool( app->device, dpci, NULL, &app->descriptor_pool );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create descriptor pool" );
-  }
-}
-
-static VkDeviceMemory
-allocate_memory( VkDevice     device,
-                 uint32_t     memory_type_idx,
-                 VkDeviceSize size )
-{
-  VkResult       res = VK_SUCCESS;
-  VkDeviceMemory ret = VK_NULL_HANDLE;
-
   VkMemoryAllocateInfo info[] = {{
       .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
       .pNext           = NULL,
-      .allocationSize  = size,
+      .allocationSize  = MEMORY_SIZE,
       .memoryTypeIndex = memory_type_idx,
   }};
 
-  res = vkAllocateMemory( device, info, NULL, &ret );
+  VkResult res = vkAllocateMemory( device, info, NULL, memory );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to allocate memory on device, ret=%d", res );
   }
-
-  return ret;
 }
 
-static void*
-map_memory( VkDevice        device,
+static void
+map_memory( void volatile** map_to,
+            VkDevice        device,
             VkDeviceMemory  memory )
 {
-  void* ret;
-  VkResult res = vkMapMemory( device, memory, 0, VK_WHOLE_SIZE, 0, &ret );
+  VkResult res = vkMapMemory( device, memory, 0, MEMORY_SIZE, 0, (void**)map_to );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to map memory" );
   }
+}
 
-  return ret;
+static void
+create_window( void )
+{
+  if( !glfwVulkanSupported() ) {
+    FATAL( "GLFW doesn't support vulkan" );
+  }
 }
 
 void
-app_init( app_t*      app,
-          VkInstance  instance,
-          GLFWwindow* window)
+app_init( app_t*     app,
+          VkInstance instance )
 {
   VkResult res;
+
+  create_window();
 
   uint32_t physical_device_count = 0;
   res = vkEnumeratePhysicalDevices( instance, &physical_device_count, NULL );
@@ -191,17 +158,9 @@ app_init( app_t*      app,
     FATAL( "Failed to enumerate physical devices the second time, ret=%d", res );
   }
 
-  /* things we are looking for */
-  uint32_t phys_idx       = 0;
-  bool     found_queue    = false;
-  uint32_t graphics_queue = 0;
-  bool     found_host_mem = false;
-  uint32_t host_idx       = 0;
-  bool     found_card_mem = false;
-  uint32_t card_idx       = 0;      // NOTE: might be the same as host, nbd if so
-
-  for( ; phys_idx < physical_device_count; ++phys_idx ) {
-    VkPhysicalDevice dev = physical_devices[phys_idx];
+  bool found_device = false;
+  for( uint32_t i = 0; i < physical_device_count; ++i ) {
+    VkPhysicalDevice dev = physical_devices[i];
 
     VkQueueFamilyProperties* props    = NULL;
     uint32_t                 prop_cnt = 0;
@@ -212,20 +171,20 @@ app_init( app_t*      app,
 
     vkGetPhysicalDeviceQueueFamilyProperties( dev, &prop_cnt, props );
 
-    // NOTE: graphics implies transfer, drivers not required to mark
-    //       as transfer
-    // NOTE: currently requiring that graphics+present queue are same
-    //       queue
+    uint32_t compute_queue = 0;
+    bool     found_queue   = false;
 
     for( uint32_t j = 0; j < prop_cnt; ++j ) {
-      VkQueueFlags flags = props[j].queueFlags;
-      if( !(flags & VK_QUEUE_GRAPHICS_BIT) ) continue;
-      if( !glfwGetPhysicalDevicePresentationSupport( instance, dev, j ) ) continue;
-
-      graphics_queue = j;
-      found_queue    = true;
-      break;
+      VkQueueFlags flags = props[i].queueFlags;
+      if( flags & VK_QUEUE_COMPUTE_BIT ) {
+        compute_queue = j;
+        found_queue = true;
+        break;
+      }
     }
+
+    uint32_t memory_idx = 0;
+    bool     found_mem  = false;
 
     VkPhysicalDeviceMemoryProperties mem_props[1];
     vkGetPhysicalDeviceMemoryProperties( dev, mem_props );
@@ -233,65 +192,41 @@ app_init( app_t*      app,
     uint32_t            n_mem = mem_props->memoryTypeCount;
     VkMemoryType const* mt    = mem_props->memoryTypes;
     for( uint32_t j = 0; j < n_mem; ++j ) {
-      if( found_card_mem && found_host_mem ) break;
-      if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ) {
-        host_idx       = j;
-        found_host_mem = true;
-      }
-
-      if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ) {
-        card_idx       = j;
-        found_card_mem = true;
+      if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) {
+        memory_idx = j;
+        found_mem = true;
+        break;
       }
     }
 
-    if( LIKELY( found_queue && found_host_mem && found_card_mem ) ) {
-      goto finish_init;
+    if( LIKELY( found_queue && found_mem ) ) {
+      LOG_INFO( "Found memory at idx %u", memory_idx );
+      LOG_INFO( "Compute queue at idx %u", compute_queue );
+
+      open_device( app, dev, compute_queue );
+      open_memory( &app->coherent_memory, app->device, memory_idx );
+      map_memory( &app->mapped_memory, app->device, app->coherent_memory );
+
+      found_device = true;
+      free( props );
+      break;
     }
     else {
-      LOG_INFO( "Device %u not valid. found host memory %s found card memory %s found_queue %s", phys_idx,
-                ( found_host_mem ? "YES" : "NO" ),
-                ( found_card_mem ? "YES" : "NO" ),
-                ( found_queue    ? "YES" : "NO" ) );
+      LOG_INFO( "Device %u not valid. found memory? %s found_queue %s", i,
+                ( found_mem   ? "YES" : "NO" ),
+                ( found_queue ? "YES" : "NO" ) );
 
     }
 
     free( props );
   }
 
-  /* if we get here, we didn't find a good device */
-  FATAL( "No acceptable device found" );
+  if( UNLIKELY( !found_device ) ) {
+    FATAL( "No acceptable device found" );
+  }
 
-finish_init:;
-  VkPhysicalDevice phy = physical_devices[phys_idx];
-  free( physical_devices ); // done with this
+  free( physical_devices );
 
-  LOG_INFO( "Compute queue at idx %u", graphics_queue );
-  LOG_INFO( "Found host memory at idx %u", host_idx );
-  LOG_INFO( "Found card memory at idx %u", card_idx );
-
-  open_device( app, phy, graphics_queue );
-  create_pools( app );
-
-  app->host_memory = allocate_memory( app->device, host_idx, 2<<22 );
-  app->mapped_host_memory = map_memory( app->device, app->host_memory );
-  app->device_memory = allocate_memory( app->device, card_idx, 2<<22 );
-
-  // we'll need to create some buffers on the gpu side so that we can
-  // bind stuff to the gpu. whats the difference between an image and
-  // a buffer?
-
-  // also a swap chain ugh
-
-  // also load shaders
-
-  // build bindings
-
-  // build pipeline
-
-  // recording commang buffer happens where?
-
-#if 0
   // continue init
   size_t shader_bytes = 0;
   char* shader_contents = read_entire_file( "src/shader.spv", &shader_bytes );
@@ -416,6 +351,25 @@ finish_init:;
     FATAL( "Failed to create vulkan pipeline, ret=%d", res );
   }
 
+  VkDescriptorPoolSize dpool_sizes[] = {{
+      .type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      .descriptorCount = 2,
+  }};
+
+  VkDescriptorPoolCreateInfo dpci[] = {{
+      .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      .pNext         = NULL,
+      .flags         = 0,
+      .maxSets       = 1,
+      .poolSizeCount = 1,
+      .pPoolSizes    = dpool_sizes,
+  }};
+
+  res = vkCreateDescriptorPool( app->device, dpci, NULL, &app->pool );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create descriptor pool" );
+  }
+
   VkDescriptorSetAllocateInfo dsai[] = {{
       .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
       .pNext              = NULL,
@@ -467,6 +421,20 @@ finish_init:;
 
   vkUpdateDescriptorSets( app->device, 2, write_dset, 0, NULL );
 
+  // FIXME revist the descriptor bindings nonsense
+
+  VkCommandPoolCreateInfo cmdpci[] = {{
+      .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+      .pNext            = NULL,
+      .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+      .queueFamilyIndex = app->compute_queue_idx,
+  }};
+
+  res = vkCreateCommandPool( app->device, cmdpci, NULL, &app->cmd_pool );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create command pool" );
+  }
+
   VkCommandBufferAllocateInfo cmdbci[] = {{
       .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
       .pNext              = NULL,
@@ -479,7 +447,7 @@ finish_init:;
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to allocate command buffers" );
   }
-#endif
+
 }
 
 void
@@ -487,9 +455,10 @@ app_destroy( app_t* app )
 {
   if( !app ) return;
 
-#if 0
   /* cmd_buffer? */
-  /* dset? */
+  vkDestroyCommandPool( app->device, app->cmd_pool, NULL );
+  /* dset? */ // FIXME this is a leak
+  vkDestroyDescriptorPool( app->device, app->pool, NULL );
   vkDestroyPipeline( app->device, app->pipeline, NULL );
   vkDestroyPipelineLayout( app->device, app->playout, NULL );
   vkDestroyDescriptorSetLayout( app->device, app->dset_layout, NULL );
@@ -497,16 +466,18 @@ app_destroy( app_t* app )
   vkDestroyBuffer( app->device, app->out_buffer, NULL );
   vkDestroyShaderModule( app->device, app->shader, NULL );
   vkUnmapMemory( app->device, app->coherent_memory );
-#endif
-
-  vkDestroyCommandPool( app->device, app->cmd_pool, NULL );
-  vkDestroyDescriptorPool( app->device, app->descriptor_pool, NULL );
-  vkFreeMemory( app->device, app->device_memory, NULL );
-  vkFreeMemory( app->device, app->host_memory, NULL );
+  vkFreeMemory( app->device, app->coherent_memory, NULL );
   vkDestroyDevice( app->device, NULL );
 }
 
-#if 0
+static uint64_t
+rdtscp( void )
+{
+  uint32_t hi, lo;
+  __asm__ volatile( "rdtscp": "=a"(lo), "=d"(hi));
+  return (uint64_t)lo | ( (uint64_t)hi << 32 );
+}
+
 __attribute__((noinline))
 static uint64_t
 run_once( app_t*  app,
@@ -542,9 +513,11 @@ run_once( app_t*  app,
       .pCommandBuffers    = &app->cmd_buffer,
   }};
 
-  uint32_t volatile*       mem = app->mapped_memory;
-  uint32_t const volatile* loc = mem + N_INTS;
+  uint32_t volatile* mem = app->mapped_memory;
+  uint32_t volatile* loc = mem + N_INTS;
 
+  *mem = 0;
+  *loc = 0;
   vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
 
   *mem = 1; // trigger the write
@@ -553,23 +526,27 @@ run_once( app_t*  app,
   // wait for the two
   while( true ) {
     if( LIKELY( *loc == 2 ) ) break;
+    if( LIKELY( *loc == 3 ) ) {
+      LOG_INFO( "Trial failed" );
+      return 0;
+    }
   }
 
   uint64_t finish = rdtscp();
 
-  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 10000000000 );
+  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 100000 );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to wait for fence" );
   }
 
   return finish-start;
 }
-#endif
 
 void
 app_run( app_t* app )
 {
-#if 0
+  return;
+
   VkFenceCreateInfo fci[] = {{
       .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
       .pNext = NULL,
@@ -592,12 +569,11 @@ app_run( app_t* app )
   }
 
   vkDestroyFence( app->device, fence, NULL );
-
-  // static uint64_t tsc_freq_khz = 3892231; // AMD
-  static uint64_t tsc_freq_khz = 2099944; // intel
+  
+  static uint64_t tsc_freq_khz = 3892231; // AMD
+  // static uint64_t tsc_freq_khz = 2099944; // intel
   double          ns_per_cycle = 1./((double)(tsc_freq_khz * 1000)/1e9);
   for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
     printf( "%f\n", (double)trials[i]*ns_per_cycle );
   }
-#endif
 }
