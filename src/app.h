@@ -19,6 +19,9 @@ struct app
   VkDevice device;
 
   VkSwapchainKHR swapchain;
+  uint32_t       n_swapchain_images;
+  VkImage*       swapchain_images;
+  VkImageView*   image_views;
 
 #if 0
   VkDeviceMemory host_memory;

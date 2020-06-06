@@ -229,7 +229,10 @@ pick_swap_extent( VkSurfaceCapabilitiesKHR const* caps )
 static VkSwapchainKHR
 create_swapchain( VkPhysicalDevice phy,
                   VkDevice         device,
-                  VkSurfaceKHR     surface )
+                  VkSurfaceKHR     surface,
+                  uint32_t *       out_n_swapchain_images,
+                  VkImage * *      out_swapchain_images,
+                  VkImageView * *  out_image_views )
 {
   VkResult                 res;
   VkSurfaceFormatKHR       surface_format;
@@ -281,7 +284,61 @@ create_swapchain( VkPhysicalDevice phy,
     FATAL( "Failed to create swapchain, err=%d", res );
   }
 
+  uint32_t n_swapchain_images;
+
+  res = vkGetSwapchainImagesKHR( device, swapchain, &n_swapchain_images, NULL );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to get swapchain images, err=%d", res );
+  }
+
+  VkImage* swapchain_images = malloc( n_swapchain_images * sizeof( *swapchain_images ) );
+  if( UNLIKELY( !swapchain_images ) ) FATAL( "Failed to allocate" );
+
+  res = vkGetSwapchainImagesKHR( device, swapchain, &n_swapchain_images, swapchain_images );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to get swapchain images, err=%d", res );
+  }
+
+  VkImageView* image_views = malloc( n_swapchain_images * sizeof( *image_views ) );
+  if( UNLIKELY( !image_views ) ) FATAL( "Failed to allocate" );
+
+  for( uint32_t i = 0; i < n_swapchain_images; ++i ) {
+    VkImageViewCreateInfo ci[1] = {{
+      .sType        = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .pNext        = NULL,
+      .image        = swapchain_images[i],
+      .viewType     = VK_IMAGE_VIEW_TYPE_2D,
+      .format       = surface_format.format,
+      /* don't screw with the colors */
+      .components.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+      .components.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+      .components.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+      .components.a = VK_COMPONENT_SWIZZLE_IDENTITY,
+      /* ???? */
+      .subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+      .subresourceRange.baseMipLevel   = 0,
+      .subresourceRange.levelCount     = 1,
+      .subresourceRange.baseArrayLayer = 0,
+      .subresourceRange.layerCount     = 1,
+
+    }};
+
+    res = vkCreateImageView( device, ci, NULL, &image_views[i] );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to create image view, err=%d", res );
+    }
+  }
+
+  *out_n_swapchain_images = n_swapchain_images;
+  *out_swapchain_images   = swapchain_images;
+  *out_image_views        = image_views;
   return swapchain;
+}
+
+static void
+setup_images( app_t * app )
+{
+  // app is partially constructed
 }
 
 static GLFWwindow*
@@ -397,7 +454,13 @@ app_init( app_t*     app,
       open_device( app, dev, graphics_queue );
       // open_memory( &app->coherent_memory, app->device, memory_idx );
       // map_memory( &app->mapped_memory, app->device, app->coherent_memory );
-      app->swapchain = create_swapchain( dev, app->device, app->window_surface );
+      app->swapchain = create_swapchain( dev, app->device, app->window_surface,
+                                         /* out */
+                                         &app->n_swapchain_images,
+                                         &app->swapchain_images,
+                                         &app->image_views );
+
+      // FIXME maybe store extent, tutorial says to..
 
       found_device = true;
       free( props );
@@ -655,6 +718,11 @@ app_destroy( app_t* app )
   glfwDestroyWindow( app->window );
 
   // then tear down in dag order
+  for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    vkDestroyImageView( app->device, app->image_views[i], NULL );
+  }
+  free( app->image_views );
+  free( app->swapchain_images );
   vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
   vkDestroySurfaceKHR( app->instance, app->window_surface, NULL );
 
