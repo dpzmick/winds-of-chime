@@ -25,3 +25,6 @@ rdtscp( void )
   __asm__ volatile( "rdtscp": "=a"(lo), "=d"(hi));
   return (uint64_t)lo | ( (uint64_t)hi << 32 );
 }
+
+#define MIN( x, y ) ( ((x)<(y))  ? (x) : (y) )
+#define MAX( x, y ) ( ((x)>=(y)) ? (x) : (y) )

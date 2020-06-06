@@ -9,14 +9,18 @@ typedef struct app app_t;
 
 struct app
 {
-  VkInstance  instance;         // borrow
-  GLFWwindow* window;           // borrow
+  VkInstance         instance;  // borrow
+  GLFWwindow*        window;
+  VkSurfaceKHR       window_surface;
 
-  float       queue_priority;
-  uint32_t    queue_idx;
-  VkQueue     queue;
-  VkDevice    device;
+  float    queue_priority[1];
+  uint32_t queue_idx;
+  VkQueue  queue;
+  VkDevice device;
 
+  VkSwapchainKHR swapchain;
+
+#if 0
   VkDeviceMemory host_memory;
   void*          mapped_host_memory;
   VkDeviceMemory device_memory;
@@ -24,7 +28,6 @@ struct app
   VkCommandPool    cmd_pool;
   VkDescriptorPool descriptor_pool;
 
-#if 0
   VkShaderModule shader;
 
   VkBuffer in_buffer;
@@ -43,8 +46,7 @@ struct app
 
 void
 app_init( app_t*      app,
-          VkInstance  instance,
-          GLFWwindow* window );
+          VkInstance  instance );
 
 void
 app_destroy( app_t* app );

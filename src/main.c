@@ -12,8 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char const * validation_layer = "VK_LAYER_LUNARG_standard_validation";
-static char const * debug_ext        = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+static char const * validation_layer = "VK_LAYER_KHRONOS_validation";
 
 static VkBool32
 debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
@@ -31,12 +30,18 @@ static VkDebugUtilsMessengerCreateInfoEXT dbg_create_info[] = {{
   .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
                    | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
                    | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-  .messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
-                   | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+  .messageType     = // VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
                    | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
   .pfnUserCallback = debug_callback,
   .pUserData       = NULL,
 }};
+
+static void
+glfw_error_callback( int code, char const * desc )
+{
+  LOG_ERROR( "GLFW Error %s (%d)", desc, code );
+}
 
 static VkInstance
 create_instance( VkDebugUtilsMessengerEXT* out_messenger )
@@ -66,15 +71,22 @@ create_instance( VkDebugUtilsMessengerEXT* out_messenger )
   vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, NULL );
   if( vk_res == VK_SUCCESS ) {
     VkExtensionProperties* props = malloc( sizeof( *props )*validation_count );
+    vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, props );
+    if( UNLIKELY( vk_res != VK_SUCCESS ) ) FATAL( "Failed to get extensions for validation layer" );
+
     for( size_t i = 0; i < validation_count; ++i ) {
-      if( 0 == strcmp( props[ i ].extensionName, debug_ext ) ) {
+      if( 0 == strcmp( props[ i ].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) ) {
         enabled_layers[ enabled_layer_count++ ] = strdup( validation_layer );
-        enabled_exts[ enabled_ext_count++ ]     = strdup( debug_ext );
+        enabled_exts[ enabled_ext_count++ ]     = strdup( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
         do_validation = true;
         break;
       }
     }
     free( props );
+
+    if( !do_validation ) {
+      LOG_INFO( "Failed to find extension for debug messaging" );
+    }
   }
   else {
     LOG_INFO( "Failed to get extensions for layer %s."
@@ -108,6 +120,7 @@ create_instance( VkDebugUtilsMessengerEXT* out_messenger )
   volkLoadInstance( instance );
 
   if( do_validation ) {
+    LOG_INFO( "Installing debug messenger" );
     vk_res = vkCreateDebugUtilsMessengerEXT( instance, dbg_create_info, NULL, out_messenger );
     if( UNLIKELY( vk_res != VK_SUCCESS ) ) {
       FATAL( "Failed to create debug messenger ret=%d", vk_res );
@@ -137,6 +150,8 @@ main()
   VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
   app_t                    app[1];
 
+  glfwSetErrorCallback( glfw_error_callback );
+
   glfw_res = glfwInit();
   if( UNLIKELY( glfw_res != GLFW_TRUE ) ) {
     FATAL( "Failed to initialize glfw with %d", glfw_res );
@@ -147,7 +162,7 @@ main()
     FATAL( "Failed to initialize volk with res=%d", vk_res );
   }
 
-  instance = create_instance(&messenger); // crashes on failure
+  instance = create_instance( &messenger ); // crashes on failure
 
   app_init( app, instance );
   app_run( app );
