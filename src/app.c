@@ -4,6 +4,7 @@
 
 #include "volk.h"
 
+#include <assert.h>
 #include <GLFW/glfw3.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -68,6 +69,10 @@ open_device( app_t *          app,
       .pQueuePriorities = app->queue_priority,
   }};
 
+  char const * const enabled_exts[] = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME
+  };
+
   const VkDeviceCreateInfo device_c[] = {{
       .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
       .pNext                   = NULL,
@@ -76,8 +81,8 @@ open_device( app_t *          app,
       .pQueueCreateInfos       = q_create,
       .enabledLayerCount       = 0,
       .ppEnabledLayerNames     = NULL,
-      .enabledExtensionCount   = 0,
-      .ppEnabledExtensionNames = NULL,
+      .enabledExtensionCount   = (uint32_t)ARRAY_SIZE( enabled_exts ),
+      .ppEnabledExtensionNames = enabled_exts,
       .pEnabledFeatures        = NULL,
   }};
 
@@ -143,6 +148,11 @@ pick_surface_format( VkPhysicalDevice device,
   VkSurfaceFormatKHR * formats = malloc( format_count * sizeof( *formats ) );
   if( UNLIKELY( !formats ) ) FATAL( "Failed to allocate" );
 
+  res = vkGetPhysicalDeviceSurfaceFormatsKHR( device, surface, &format_count, formats );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to get swapchain surface formats, err=%d", res );
+  }
+
   // default to first one if we don't find preferred
   VkSurfaceFormatKHR picked = formats[0];
   for( uint32_t i = 0; i < format_count; ++i ) {
@@ -172,6 +182,11 @@ pick_surface_present_mode( VkPhysicalDevice device,
 
   VkPresentModeKHR* modes = malloc( count * sizeof( *modes ) );
   if( UNLIKELY( !modes ) ) FATAL( "Failed to allocate" );
+
+  res = vkGetPhysicalDeviceSurfacePresentModesKHR( device, surface, &count, modes );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to get swapchain present modes, err=%d", res );
+  }
 
   // check if we support triple buffering
   // if not, just pick FIFO, since it's always available
@@ -222,6 +237,9 @@ create_swapchain( VkPhysicalDevice phy,
   VkExtent2D               surface_swap_extent;
   uint32_t                 image_count;
   VkSurfaceCapabilitiesKHR caps[1];
+
+  // make sure that we actually managed to load these functions
+  assert( vkCreateSwapchainKHR );
 
   res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR( phy, surface, caps );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
@@ -633,8 +651,14 @@ void
 app_destroy( app_t* app )
 {
   if( !app ) return;
+  // close the window first
   glfwDestroyWindow( app->window );
+
+  // then tear down in dag order
+  vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
   vkDestroySurfaceKHR( app->instance, app->window_surface, NULL );
+
+  vkDestroyDevice( app->device, NULL );
 
 #if 0
   /* cmd_buffer? */
@@ -649,7 +673,6 @@ app_destroy( app_t* app )
   vkDestroyShaderModule( app->device, app->shader, NULL );
   vkUnmapMemory( app->device, app->coherent_memory );
   vkFreeMemory( app->device, app->coherent_memory, NULL );
-  vkDestroyDevice( app->device, NULL );
 #endif
 }
 
