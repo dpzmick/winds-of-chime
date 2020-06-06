@@ -320,7 +320,6 @@ create_swapchain( VkPhysicalDevice phy,
       .subresourceRange.levelCount     = 1,
       .subresourceRange.baseArrayLayer = 0,
       .subresourceRange.layerCount     = 1,
-
     }};
 
     res = vkCreateImageView( device, ci, NULL, &image_views[i] );
