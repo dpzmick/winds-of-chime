@@ -1,12 +1,17 @@
-set(shader_src ${CMAKE_CURRENT_SOURCE_DIR}/shader.glsl)
-set(shader_dst ${CMAKE_CURRENT_BINARY_DIR}/shader.spv)
-message("shader in ${shader_src}")
-add_custom_command(
-  OUTPUT  ${shader_dst}
-  DEPENDS ${shader_src}
-  COMMAND glslc -fshader-stage=compute ${shader_src} -o ${shader_dst}
-)
-add_custom_target(shader ALL DEPENDS ${shader_dst})
+add_custom_target(shader ALL)
+function(add_shader name shader_src shader_dst stage)
+  set(in ${CMAKE_CURRENT_SOURCE_DIR}/${shader_src})
+  set(out ${CMAKE_CURRENT_BINARY_DIR}/${shader_dst})
+  add_custom_command(
+    OUTPUT  ${shader_dst}
+    DEPENDS ${in}
+    COMMAND glslc -fshader-stage=${stage} ${in} -o ${out})
+  add_custom_target(shader-${name} DEPENDS ${out})
+  add_dependencies(shader shader-${name})
+endfunction()
+
+add_shader(vert shader.vert vert.spv vertex)
+add_shader(frag shader.frag frag.spv fragment)
 
 add_executable(main common.c log.c app.c main.c)
 target_link_libraries(main volk glfw)

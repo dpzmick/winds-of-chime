@@ -13,38 +13,23 @@ struct app
   GLFWwindow*        window;
   VkSurfaceKHR       window_surface;
 
-  float    queue_priority[1];
-  uint32_t queue_idx;
-  VkQueue  queue;
-  VkDevice device;
+  float              queue_priority[1];
+  uint32_t           queue_idx;
+  VkQueue            queue;
+  VkDevice           device;
 
-  VkSwapchainKHR swapchain;
-  uint32_t       n_swapchain_images;
-  VkImage*       swapchain_images;
-  VkImageView*   image_views;
+  VkExtent2D         swapchain_extent[1];
+  VkSurfaceFormatKHR swapchain_surface_format[1];
+  VkSwapchainKHR     swapchain;
+  uint32_t           n_swapchain_images;
+  VkImage*           swapchain_images;
+  VkImageView*       image_views;
 
-#if 0
-  VkDeviceMemory host_memory;
-  void*          mapped_host_memory;
-  VkDeviceMemory device_memory;
+  VkShaderModule     vert;
+  VkShaderModule     frag;
 
-  VkCommandPool    cmd_pool;
-  VkDescriptorPool descriptor_pool;
-
-  VkShaderModule shader;
-
-  VkBuffer in_buffer;
-  VkBuffer out_buffer;
-
-  // FIXME do I need to keep these around after constructing pipeline?
-  VkDescriptorSetLayout dset_layout;
-  VkPipelineLayout      playout;
-
-  VkPipeline pipeline;
-  VkDescriptorSet dset;
-
-  VkCommandBuffer cmd_buffer;
-#endif
+  VkPipelineLayout   pipeline_layout;
+  VkRenderPass       render_pass;
 };
 
 void

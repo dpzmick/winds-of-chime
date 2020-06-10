@@ -52,6 +52,38 @@ read_entire_file( char const* filename,
   }
 }
 
+static VkShaderModule
+create_shader( char const * fname,
+               VkDevice     device )
+{
+  VkResult       res;
+  VkShaderModule shader;
+
+  size_t shader_bytes    = 0;
+  char*  shader_contents = read_entire_file( fname, &shader_bytes );
+  if( UNLIKELY( shader_bytes % sizeof( uint32_t ) != 0 ) ) {
+    FATAL( "Shader is the wrong size, should be uint32_t multiple" );
+  }
+
+  VkShaderModuleCreateInfo ci[] = {{
+      .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .pNext    = NULL,
+      .flags    = 0,
+      .codeSize = shader_bytes,
+      .pCode    = (uint32_t const*)shader_contents,
+  }};
+
+  res = vkCreateShaderModule( device, ci, NULL, &shader );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create shader module ret=%d", res );
+  }
+
+  free( shader_contents );
+  LOG_INFO( "Loaded shader from %s, size=%zu", fname, shader_bytes );
+
+  return shader;
+}
+
 static void
 open_device( app_t *          app,
              VkPhysicalDevice physical_device,
@@ -227,12 +259,14 @@ pick_swap_extent( VkSurfaceCapabilitiesKHR const* caps )
 }
 
 static VkSwapchainKHR
-create_swapchain( VkPhysicalDevice phy,
-                  VkDevice         device,
-                  VkSurfaceKHR     surface,
-                  uint32_t *       out_n_swapchain_images,
-                  VkImage * *      out_swapchain_images,
-                  VkImageView * *  out_image_views )
+create_swapchain( VkPhysicalDevice     phy,
+                  VkDevice             device,
+                  VkSurfaceKHR         surface,
+                  uint32_t *           out_n_swapchain_images,
+                  VkImage * *          out_swapchain_images,
+                  VkSurfaceFormatKHR * out_surface_format,
+                  VkImageView * *      out_image_views,
+                  VkExtent2D *         out_extent )
 {
   VkResult                 res;
   VkSurfaceFormatKHR       surface_format;
@@ -328,16 +362,12 @@ create_swapchain( VkPhysicalDevice phy,
     }
   }
 
+  *out_extent             = surface_swap_extent;
   *out_n_swapchain_images = n_swapchain_images;
   *out_swapchain_images   = swapchain_images;
+  *out_surface_format     = surface_format;
   *out_image_views        = image_views;
   return swapchain;
-}
-
-static void
-setup_images( app_t * app )
-{
-  // app is partially constructed
 }
 
 static GLFWwindow*
@@ -457,7 +487,9 @@ app_init( app_t*     app,
                                          /* out */
                                          &app->n_swapchain_images,
                                          &app->swapchain_images,
-                                         &app->image_views );
+                                         app->swapchain_surface_format,
+                                         &app->image_views,
+                                         app->swapchain_extent );
 
       // FIXME maybe store extent, tutorial says to..
 
@@ -482,231 +514,183 @@ app_init( app_t*     app,
 
   free( physical_devices );
 
-  // create swap chain (probably need to add an extension)
-  // create image views
 
-#if 0
-  // continue init
-  size_t shader_bytes = 0;
-  char* shader_contents = read_entire_file( "src/shader.spv", &shader_bytes );
-  if( UNLIKELY( shader_bytes % sizeof( uint32_t ) != 0 ) ) {
-    FATAL( "Shader is the wrong size, should be uint32_t multiple" );
-  }
+  // it's pipeline time
 
-  LOG_INFO( "Loaded shader, size=%zu", shader_bytes );
 
-  VkShaderModuleCreateInfo screate[] = {{
-      .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .pNext    = NULL,
-      .flags    = 0,
-      .codeSize = shader_bytes,
-      .pCode    = (uint32_t const*)shader_contents,
+  app->vert = create_shader( "src/vert.spv", app->device );
+  app->frag = create_shader( "src/frag.spv", app->device );
+
+  VkPipelineShaderStageCreateInfo vert_stage_ci[] = {{
+    .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+    .pNext               = NULL,
+    .flags               = 0,
+    .stage               = VK_SHADER_STAGE_VERTEX_BIT,
+    .module              = app->vert,
+    .pName               = "main",
+    .pSpecializationInfo = NULL,
   }};
 
-  res = vkCreateShaderModule( app->device, screate, NULL, &app->shader );
+  VkPipelineShaderStageCreateInfo frag_stage_ci[] = {{
+    .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+    .pNext               = NULL,
+    .flags               = 0,
+    .stage               = VK_SHADER_STAGE_FRAGMENT_BIT,
+    .module              = app->frag,
+    .pName               = "main",
+    .pSpecializationInfo = NULL,
+  }};
+
+  // describe the vertex data that is input to the vertex shader
+  // for now, basically empty
+  VkPipelineVertexInputStateCreateInfo vert_input_ci[] = {{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .pNext = NULL,
+    .flags = 0,
+    .vertexBindingDescriptionCount   = 0,
+    .pVertexBindingDescriptions      = NULL,
+    .vertexAttributeDescriptionCount = 0,
+    .pVertexAttributeDescriptions    = NULL,
+  }};
+
+  // describe what kind of geometry will be drawn
+  VkPipelineInputAssemblyStateCreateInfo input_astate_ci[] = {{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+    .pNext = 0,
+    .flags = 0,
+    .topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    .primitiveRestartEnable = VK_FALSE,
+  }};
+
+  VkViewport viewport[1] = {{
+    .x        = 0.0f,
+    .y        = 0.0f,
+    .width    = (float)app->swapchain_extent->width,
+    .height   = (float)app->swapchain_extent->height,
+    .minDepth = 0.0f,
+    .maxDepth = 1.0f,
+  }};
+
+  VkRect2D scissor[] = {{
+    .offset = (VkOffset2D){.x = 0, .y = 0},
+    .extent = *app->swapchain_extent,
+  }};
+
+  VkPipelineViewportStateCreateInfo viewport_ci[] = {{
+    .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+    .pNext         = NULL,
+    .flags         = 0,
+    .viewportCount = 1,
+    .pViewports    = viewport,
+    .scissorCount  = 1,
+    .pScissors     = scissor,
+  }};
+
+  VkPipelineRasterizationStateCreateInfo raster_ci[] = {{
+    .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+    .pNext                   = NULL,
+    .flags                   = 0,
+    .depthClampEnable        = VK_FALSE,
+    .rasterizerDiscardEnable = VK_FALSE,
+    .polygonMode             = VK_POLYGON_MODE_FILL,
+    .cullMode                = VK_CULL_MODE_BACK_BIT,
+    .frontFace               = VK_FRONT_FACE_CLOCKWISE,
+    .depthBiasEnable         = VK_FALSE,
+    .depthBiasConstantFactor = 0.0f,
+    .depthBiasClamp          = 0.0f,
+    .depthBiasSlopeFactor    = 0.0f,
+    .lineWidth               = 1.0f,
+  }};
+
+  VkPipelineMultisampleStateCreateInfo msaa[] = {{
+    .sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+    .pNext                 = NULL,
+    .flags                 = 0,
+    .rasterizationSamples  = VK_SAMPLE_COUNT_1_BIT,
+    .sampleShadingEnable   = VK_FALSE,
+    .minSampleShading      = 1.0f,
+    .pSampleMask           = NULL,
+    .alphaToCoverageEnable = VK_FALSE,
+    .alphaToOneEnable      = VK_FALSE,
+  }};
+
+  VkPipelineColorBlendAttachmentState color_blend_attach[1];
+  memset( color_blend_attach, 0, sizeof( color_blend_attach ) );
+  color_blend_attach->colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  color_blend_attach->blendEnable    = VK_FALSE;
+
+  VkPipelineColorBlendStateCreateInfo blend_ci[] = {{
+    .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .pNext           = NULL,
+    .flags           = 0,
+    .logicOpEnable   = VK_FALSE,
+    .logicOp         = VK_LOGIC_OP_COPY,
+    .attachmentCount = 1,
+    .pAttachments    = color_blend_attach,
+    .blendConstants  = {0.0f, 0.0f, 0.0f, 0.0f},
+  }};
+
+  VkPipelineLayoutCreateInfo pipeline_layout_ci[] = {{
+    .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    .pNext                  = NULL,
+    .flags                  = 0,
+    .setLayoutCount         = 0,
+    .pSetLayouts            = NULL,
+    .pushConstantRangeCount = 0,
+    .pPushConstantRanges    = NULL,
+  }};
+
+  res = vkCreatePipelineLayout( app->device, pipeline_layout_ci, NULL, &app->pipeline_layout );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create shader module ret=%d", res );
+    FATAL( "Failed to create pipeline layout, err=%d", res );
   }
 
-  free( shader_contents );
+  // -- render pass
 
-  VkBufferCreateInfo bcreate[] = {{
-      .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-      .pNext                 = NULL,
-      .flags                 = 0,
-      .size                  = BUFFER_SIZE,
-      .usage                 = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-      .sharingMode           = VK_SHARING_MODE_EXCLUSIVE, // applies to vk queues only
-      .queueFamilyIndexCount = 0,
-      .pQueueFamilyIndices   = NULL,
+  VkAttachmentDescription color_attach[] = {{
+    .flags          = 0,
+    .format         = app->swapchain_surface_format->format,
+    .samples        = VK_SAMPLE_COUNT_1_BIT,
+    .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+    .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+    .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+    .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
   }};
 
-  res = vkCreateBuffer( app->device, bcreate, 0, &app->in_buffer );
+  VkAttachmentReference attach_ref[] = {{
+    .attachment = 0,
+    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+  }};
+
+  VkSubpassDescription subpass[] = {{
+    .flags                   = 0,
+    .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
+    .inputAttachmentCount    = 0,
+    .pInputAttachments       = NULL,
+    .colorAttachmentCount    = 1,
+    .pColorAttachments       = attach_ref,
+    .pResolveAttachments     = NULL,
+    .pDepthStencilAttachment = NULL,
+    .preserveAttachmentCount = 0,
+    .pPreserveAttachments    = NULL,
+  }};
+
+  VkRenderPassCreateInfo render_pass_ci[] = {{
+    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+    .pNext           = NULL,
+    .flags           = 0,
+    .attachmentCount = 1,
+    .pAttachments    = color_attach,
+    .subpassCount    = 1,
+    .pSubpasses      = subpass,
+  }};
+
+  res = vkCreateRenderPass( app->device, render_pass_ci, NULL, &app->render_pass );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create in_buffer, ret=%d", res );
+    FATAL( "Failed to create render pass, err=%d", res );
   }
-
-  res = vkCreateBuffer( app->device, bcreate, 0, &app->out_buffer );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create out_buffer, ret=%d", res );
-  }
-
-  // bind buffers to first half and second half of memory
-  res = vkBindBufferMemory( app->device, app->in_buffer, app->coherent_memory, 0 );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to bind in_bufer" );
-  }
-
-  res = vkBindBufferMemory( app->device, app->out_buffer, app->coherent_memory, BUFFER_SIZE );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to bind out_bufer" );
-  }
-
-  // use the buffers to create bindings for the shader
-  VkDescriptorSetLayoutBinding bindings[] = {{
-      .binding            = 0,
-      .descriptorType     = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      .descriptorCount    = 1,
-      .stageFlags         = VK_SHADER_STAGE_COMPUTE_BIT,
-      .pImmutableSamplers = NULL,
-  }, {
-      .binding            = 1,
-      .descriptorType     = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      .descriptorCount    = 1,
-      .stageFlags         = VK_SHADER_STAGE_COMPUTE_BIT,
-      .pImmutableSamplers = NULL,
-  }};
-
-  VkDescriptorSetLayoutCreateInfo slci[] = {{
-      .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-      .pNext        = NULL,
-      .flags        = 0,
-      .bindingCount = ARRAY_SIZE( bindings ),
-      .pBindings    = bindings,
-  }};
-
-  res = vkCreateDescriptorSetLayout( app->device, slci, NULL, &app->dset_layout );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create dset layout" );
-  }
-
-  VkPipelineLayoutCreateInfo plci[] = {{
-      .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-      .pNext                  = NULL,
-      .flags                  = 0,
-      .setLayoutCount         = 1,
-      .pSetLayouts            = &app->dset_layout,
-      .pushConstantRangeCount = 0,
-      .pPushConstantRanges    = NULL,
-  }};
-
-  res = vkCreatePipelineLayout( app->device, plci, NULL, &app->playout );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create pipeline layout" );
-  }
-
-  VkPipelineShaderStageCreateInfo pssci[] = {{
-      .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .pNext               = NULL,
-      .flags               = 0,
-      .stage               = VK_SHADER_STAGE_COMPUTE_BIT,
-      .module              = app->shader,
-      .pName               = "main",
-      .pSpecializationInfo = NULL,
-  }};
-
-  VkComputePipelineCreateInfo pci[] = {{
-      .sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-      .pNext              = NULL,
-      .flags              = 0,
-      .stage              = *pssci,
-      .layout             = app->playout,
-      .basePipelineHandle = 0,
-      .basePipelineIndex  = 0,
-  }};
-
-  res = vkCreateComputePipelines( app->device, VK_NULL_HANDLE, 1, pci, NULL, &app->pipeline );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create vulkan pipeline, ret=%d", res );
-  }
-
-  VkDescriptorPoolSize dpool_sizes[] = {{
-      .type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      .descriptorCount = 2,
-  }};
-
-  VkDescriptorPoolCreateInfo dpci[] = {{
-      .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-      .pNext         = NULL,
-      .flags         = 0,
-      .maxSets       = 1,
-      .poolSizeCount = 1,
-      .pPoolSizes    = dpool_sizes,
-  }};
-
-  res = vkCreateDescriptorPool( app->device, dpci, NULL, &app->pool );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create descriptor pool" );
-  }
-
-  VkDescriptorSetAllocateInfo dsai[] = {{
-      .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-      .pNext              = NULL,
-      .descriptorPool     = app->pool,
-      .descriptorSetCount = 1,
-      .pSetLayouts        = &app->dset_layout,
-  }};
-
-  res = vkAllocateDescriptorSets( app->device, dsai, &app->dset );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to allocate dset" );
-  }
-
-  VkDescriptorBufferInfo in_info[] = {{
-      .buffer = app->in_buffer,
-      .offset = 0,
-      .range = VK_WHOLE_SIZE,
-  }};
-
-  VkDescriptorBufferInfo out_info[] = {{
-      .buffer = app->out_buffer,
-      .offset = 0,
-      .range = VK_WHOLE_SIZE,
-  }};
-
-  VkWriteDescriptorSet write_dset[] = {{
-      .sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-      .pNext            = NULL,
-      .dstSet           = app->dset,
-      .dstBinding       = 0,
-      .dstArrayElement  = 0,
-      .descriptorCount  = 1,
-      .descriptorType   = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      .pImageInfo       = NULL,
-      .pBufferInfo      = in_info,
-      .pTexelBufferView = NULL,
-  }, {
-      .sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-      .pNext            = NULL,
-      .dstSet           = app->dset,
-      .dstBinding       = 1,
-      .dstArrayElement  = 0,
-      .descriptorCount  = 1,
-      .descriptorType   = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      .pImageInfo       = NULL,
-      .pBufferInfo      = out_info,
-      .pTexelBufferView = NULL,
-  }};
-
-  vkUpdateDescriptorSets( app->device, 2, write_dset, 0, NULL );
-
-  // FIXME revist the descriptor bindings nonsense
-
-  VkCommandPoolCreateInfo cmdpci[] = {{
-      .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-      .pNext            = NULL,
-      .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-      .queueFamilyIndex = app->compute_queue_idx,
-  }};
-
-  res = vkCreateCommandPool( app->device, cmdpci, NULL, &app->cmd_pool );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create command pool" );
-  }
-
-  VkCommandBufferAllocateInfo cmdbci[] = {{
-      .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-      .pNext              = NULL,
-      .commandPool        = app->cmd_pool,
-      .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-      .commandBufferCount = 1,
-  }};
-
-  res = vkAllocateCommandBuffers( app->device, cmdbci, &app->cmd_buffer );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to allocate command buffers" );
-  }
-#endif
 }
 
 void
@@ -725,89 +709,14 @@ app_destroy( app_t* app )
   vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
   vkDestroySurfaceKHR( app->instance, app->window_surface, NULL );
 
+  vkDestroyShaderModule( app->device, app->vert, NULL );
+  vkDestroyShaderModule( app->device, app->frag, NULL );
+
+  vkDestroyRenderPass( app->device, app->render_pass, NULL );
+  vkDestroyPipelineLayout( app->device, app->pipeline_layout, NULL );
+
   vkDestroyDevice( app->device, NULL );
-
-#if 0
-  /* cmd_buffer? */
-  vkDestroyCommandPool( app->device, app->cmd_pool, NULL );
-  /* dset? */ // FIXME this is a leak
-  vkDestroyDescriptorPool( app->device, app->pool, NULL );
-  vkDestroyPipeline( app->device, app->pipeline, NULL );
-  vkDestroyPipelineLayout( app->device, app->playout, NULL );
-  vkDestroyDescriptorSetLayout( app->device, app->dset_layout, NULL );
-  vkDestroyBuffer( app->device, app->in_buffer, NULL );
-  vkDestroyBuffer( app->device, app->out_buffer, NULL );
-  vkDestroyShaderModule( app->device, app->shader, NULL );
-  vkUnmapMemory( app->device, app->coherent_memory );
-  vkFreeMemory( app->device, app->coherent_memory, NULL );
-#endif
 }
-
-#if 0
-__attribute__((noinline))
-static uint64_t
-run_once( app_t*  app,
-          VkFence fence )
-{
-  // record a command
-  VkCommandBufferBeginInfo cbbi[] = {{
-      .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-      .pNext            = NULL,
-      .flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-      .pInheritanceInfo = NULL,
-  }};
-
-  /* Begin recording the command buffer */
-  VkResult res = vkBeginCommandBuffer( app->cmd_buffer, cbbi );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to begin command buffer" );
-  }
-
-  vkCmdBindPipeline( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->pipeline );
-  vkCmdBindDescriptorSets( app->cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, app->playout, 0, 1, &app->dset, 0, NULL );
-  vkCmdDispatch( app->cmd_buffer, 1, 1, 1 ); // run exactly one shader
-
-  res = vkEndCommandBuffer( app->cmd_buffer );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to end command buffer" );
-  }
-
-  VkSubmitInfo submit_info[] = {{
-      .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-      .pNext              = NULL,
-      .commandBufferCount = 1,
-      .pCommandBuffers    = &app->cmd_buffer,
-  }};
-
-  uint32_t volatile* mem = app->mapped_memory;
-  uint32_t volatile* loc = mem + N_INTS;
-
-  *mem = 0;
-  *loc = 0;
-  vkQueueSubmit( app->queue, 1, submit_info, fence ); // not sure when this returns?
-
-  *mem = 1; // trigger the write
-  uint64_t start = rdtscp();
-
-  // wait for the two
-  while( true ) {
-    if( LIKELY( *loc == 2 ) ) break;
-    if( LIKELY( *loc == 3 ) ) {
-      LOG_INFO( "Trial failed" );
-      return 0;
-    }
-  }
-
-  uint64_t finish = rdtscp();
-
-  res = vkWaitForFences( app->device, 1, &fence, VK_TRUE, 100000 );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to wait for fence" );
-  }
-
-  return finish-start;
-}
-#endif
 
 static void
 mouse_button_callback( GLFWwindow* window,
@@ -836,36 +745,4 @@ app_run( app_t* app )
   while( !glfwWindowShouldClose( window ) ) {
     glfwPollEvents();
   }
-
-#if 0
-  VkFenceCreateInfo fci[] = {{
-      .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-      .pNext = NULL,
-      .flags = 0,
-  }};
-
-  VkFence fence;
-  VkResult res = vkCreateFence( app->device, fci, NULL, &fence );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create fence, res=%d", res );
-  }
-
-  uint64_t trials[1024];
-  for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
-    trials[i] = run_once( app, fence );
-    res = vkResetFences( app->device, 1, &fence );
-    if( UNLIKELY( res != VK_SUCCESS ) ) {
-      FATAL( "Failed to reset fence" );
-    }
-  }
-
-  vkDestroyFence( app->device, fence, NULL );
-  
-  static uint64_t tsc_freq_khz = 3892231; // AMD
-  // static uint64_t tsc_freq_khz = 2099944; // intel
-  double          ns_per_cycle = 1./((double)(tsc_freq_khz * 1000)/1e9);
-  for( size_t i = 0; i < ARRAY_SIZE( trials ); ++i ) {
-    printf( "%f\n", (double)trials[i]*ns_per_cycle );
-  }
-#endif
 }
