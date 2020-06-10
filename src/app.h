@@ -30,6 +30,12 @@ struct app
 
   VkPipelineLayout   pipeline_layout;
   VkRenderPass       render_pass;
+  VkPipeline         graphics_pipeline;
+
+  VkFramebuffer*     framebuffers;
+
+  VkCommandPool      command_pool;
+  VkCommandBuffer*   command_buffers;
 };
 
 void

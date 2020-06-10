@@ -521,7 +521,7 @@ app_init( app_t*     app,
   app->vert = create_shader( "src/vert.spv", app->device );
   app->frag = create_shader( "src/frag.spv", app->device );
 
-  VkPipelineShaderStageCreateInfo vert_stage_ci[] = {{
+  VkPipelineShaderStageCreateInfo shader_stages[] = {{
     .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
     .pNext               = NULL,
     .flags               = 0,
@@ -529,9 +529,7 @@ app_init( app_t*     app,
     .module              = app->vert,
     .pName               = "main",
     .pSpecializationInfo = NULL,
-  }};
-
-  VkPipelineShaderStageCreateInfo frag_stage_ci[] = {{
+  }, {
     .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
     .pNext               = NULL,
     .flags               = 0,
@@ -664,6 +662,16 @@ app_init( app_t*     app,
     .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
   }};
 
+  VkSubpassDependency dependency[] = {{
+    .srcSubpass      = VK_SUBPASS_EXTERNAL,
+    .dstSubpass      = 0,
+    .srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .srcAccessMask   = 0,
+    .dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .dstAccessMask   = 0,
+    .dependencyFlags = 0,
+  }};
+
   VkSubpassDescription subpass[] = {{
     .flags                   = 0,
     .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -685,12 +693,143 @@ app_init( app_t*     app,
     .pAttachments    = color_attach,
     .subpassCount    = 1,
     .pSubpasses      = subpass,
+    .dependencyCount = 1,
+    .pDependencies   = dependency,
   }};
 
   res = vkCreateRenderPass( app->device, render_pass_ci, NULL, &app->render_pass );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to create render pass, err=%d", res );
   }
+
+  // -- pipeline
+  VkGraphicsPipelineCreateInfo pipeline_ci[] = {{
+    .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .pNext               = NULL,
+    .flags               = 0,
+    .stageCount          = 2,
+    .pStages             = shader_stages,
+    .pVertexInputState   = vert_input_ci,
+    .pInputAssemblyState = input_astate_ci,
+    .pTessellationState  = NULL,
+    .pViewportState      = viewport_ci,
+    .pRasterizationState = raster_ci,
+    .pMultisampleState   = msaa,
+    .pDepthStencilState  = NULL,
+    .pColorBlendState    = blend_ci,
+    .pDynamicState       = NULL,
+    .layout              = app->pipeline_layout,
+    .renderPass          = app->render_pass,
+    .subpass             = 0,
+    .basePipelineHandle  = VK_NULL_HANDLE,
+    .basePipelineIndex   = -1,
+  }};
+
+  res = vkCreateGraphicsPipelines( app->device, VK_NULL_HANDLE, 1, pipeline_ci, NULL, &app->graphics_pipeline );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create graphics pipeline, err=%d", res );
+  }
+
+  app->framebuffers = malloc( app->n_swapchain_images * sizeof( *app->framebuffers) );
+  if( UNLIKELY( !app->framebuffers ) ) {
+    FATAL( "Failed to allocate" );
+  }
+
+  for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    VkImageView attachments[] = { app->image_views[i] };
+    VkFramebufferCreateInfo framebuffer_ci[] = {{
+      .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .pNext           = NULL,
+      .flags           = 0,
+      .renderPass      = app->render_pass,
+      .attachmentCount = 1,
+      .pAttachments    = attachments,
+      .width           = app->swapchain_extent->width,
+      .height          = app->swapchain_extent->height,
+      .layers          = 1,
+    }};
+
+    VkFramebuffer* out = &app->framebuffers[i];
+    res = vkCreateFramebuffer( app->device, framebuffer_ci, NULL, out );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to create framebuffer, err=%d", res );
+    }
+  }
+
+  // --
+  VkCommandPoolCreateInfo command_pool_ci[] = {{
+    .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+    .pNext            = NULL,
+    .flags            = 0,
+    .queueFamilyIndex = app->queue_idx,
+  }};
+
+  res = vkCreateCommandPool( app->device, command_pool_ci, NULL, &app->command_pool );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create command pool, err=%d", res );
+  }
+
+  app->command_buffers = malloc( app->n_swapchain_images * sizeof( *app->command_buffers ) );
+  if( UNLIKELY( !app->command_buffers ) ) {
+    FATAL( "Failed to allocate" );
+  }
+
+  VkCommandBufferAllocateInfo cb_ci[] = {{
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+    .pNext = NULL,
+    .commandPool = app->command_pool,
+    .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    .commandBufferCount = app->n_swapchain_images,
+  }};
+
+  res = vkAllocateCommandBuffers( app->device, cb_ci, app->command_buffers );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to allocate command buffers, err=%d", res );
+  }
+
+  for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    VkCommandBuffer buffer = app->command_buffers[i];
+    VkCommandBufferBeginInfo begin_info[] = {{
+      .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .pNext            = NULL,
+      .flags            = 0,
+      .pInheritanceInfo = NULL,
+    }};
+
+    res = vkBeginCommandBuffer( buffer, begin_info );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to begin command buffer, err=%d", res );
+    }
+
+    // nasty
+    VkClearValue clear[] = {{
+      .color = {
+        .float32 = { 0.0f, 0.0f, 0.0f, 1.0f }
+      }
+    }};
+
+    VkRenderPassBeginInfo render_pass_info[] = {{
+      .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+      .pNext           = NULL,
+      .renderPass      = app->render_pass,
+      .framebuffer     = app->framebuffers[i],
+      .renderArea      = { .offset = {0, 0}, .extent = *app->swapchain_extent },
+      .clearValueCount = 1,
+      .pClearValues    = clear,
+    }};
+
+    vkCmdBeginRenderPass( buffer, render_pass_info, VK_SUBPASS_CONTENTS_INLINE );
+    vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->graphics_pipeline );
+    vkCmdDraw( buffer, 3, 1, 0, 0 );
+    vkCmdEndRenderPass( buffer );
+
+    res = vkEndCommandBuffer( buffer );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to end command buffer, err=%d", res );
+    }
+  }
+
+  // we did it
 }
 
 void
@@ -714,6 +853,16 @@ app_destroy( app_t* app )
 
   vkDestroyRenderPass( app->device, app->render_pass, NULL );
   vkDestroyPipelineLayout( app->device, app->pipeline_layout, NULL );
+  vkDestroyPipeline( app->device, app->graphics_pipeline, NULL );
+
+  for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    vkDestroyFramebuffer( app->device, app->framebuffers[i], NULL );
+  }
+  free( app->framebuffers );
+
+  vkDestroyCommandPool( app->device, app->command_pool, NULL );
+
+  free( app->command_buffers );
 
   vkDestroyDevice( app->device, NULL );
 }
@@ -738,11 +887,93 @@ mouse_button_callback( GLFWwindow* window,
 void
 app_run( app_t* app )
 {
-  GLFWwindow* window = app->window;
+  VkDevice         device    = app->device;
+  VkQueue          queue     = app->queue;
+  VkSwapchainKHR   swapchain = app->swapchain;
+  VkCommandBuffer* commands  = app->command_buffers;
+  GLFWwindow*      window    = app->window;
 
   glfwSetMouseButtonCallback( window, mouse_button_callback );
 
+  // any reason for these not to be local?
+  VkResult    res;
+  VkSemaphore image_avail;
+  VkSemaphore render_finished;
+
+  VkSemaphoreCreateInfo sci[] = {{
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    .pNext = NULL,
+    .flags = 0,
+  }};
+
+  res = vkCreateSemaphore( device, sci, NULL, &image_avail );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create semaphore" );
+  }
+
+  res = vkCreateSemaphore( device, sci, NULL, &render_finished );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create semaphore" );
+  }
+
+  uint64_t last = wallclock();
   while( !glfwWindowShouldClose( window ) ) {
     glfwPollEvents();
+
+    // something is not going right with the synchronization
+    uint32_t image_index;
+    res = vkAcquireNextImageKHR( device, swapchain, UINT64_MAX, image_avail, VK_NULL_HANDLE, &image_index );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Faile to acquire image, err=%d", res );
+    }
+
+    VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    VkSemaphore          wait_sems[]   = { image_avail };
+    VkSemaphore          signal_sems[] = { render_finished };
+
+    VkSubmitInfo submit[] = {{
+      .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .pNext                = NULL,
+      .waitSemaphoreCount   = ARRAY_SIZE( wait_sems ),
+      .pWaitSemaphores      = wait_sems,
+      .pWaitDstStageMask    = wait_stages,
+      .commandBufferCount   = 1,
+      .pCommandBuffers      = commands + image_index,
+      .signalSemaphoreCount = ARRAY_SIZE( signal_sems ),
+      .pSignalSemaphores    = signal_sems,
+    }};
+
+    res = vkQueueSubmit( queue, 1, submit, VK_NULL_HANDLE );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to submit to queue, err=%d", res );
+    }
+
+    VkPresentInfoKHR present_info[] = {{
+      .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+      .pNext              = NULL,
+      .waitSemaphoreCount = ARRAY_SIZE( signal_sems ),
+      .pWaitSemaphores    = signal_sems,
+      .swapchainCount     = 1,
+      .pSwapchains        = &swapchain,
+      .pImageIndices      = &image_index,
+      .pResults           = NULL,
+    }};
+
+    res = vkQueuePresentKHR( queue, present_info );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to present image" );
+    }
+
+    // FIXME hack, something is wrong with synchronuzatin
+    vkQueueWaitIdle( queue );
+
+    uint64_t now = wallclock();
+    uint64_t dt  = now-last;
+    LOG_INFO( "now: %zu frame time %zu (%f fps)", now, dt, 1e9/(double)dt );
+
+    last = now;
   }
+
+  vkDestroySemaphore( app->device, render_finished, NULL );
+  vkDestroySemaphore( app->device, image_avail, NULL );
 }
