@@ -362,6 +362,8 @@ create_swapchain( VkPhysicalDevice     phy,
     }
   }
 
+  LOG_INFO( "Using %u swapchain images", n_swapchain_images );
+
   *out_extent             = surface_swap_extent;
   *out_n_swapchain_images = n_swapchain_images;
   *out_swapchain_images   = swapchain_images;
@@ -829,6 +831,52 @@ app_init( app_t*     app,
     }
   }
 
+
+  app->max_frames_in_flight = app->n_swapchain_images; // FIXME set a bound on what is reasonable here
+  app->image_avail_semaphores = malloc( app->max_frames_in_flight * sizeof( VkSemaphore ) );
+  if( UNLIKELY( !app->image_avail_semaphores ) ) {
+    FATAL( "Failed to allocate" );
+  }
+
+  app->render_finished_semaphores = malloc( app->max_frames_in_flight * sizeof( VkSemaphore ) );
+  if( UNLIKELY( !app->render_finished_semaphores ) ) {
+    FATAL( "Failed to allocate" );
+  }
+
+  app->in_flight_fences = malloc( app->max_frames_in_flight * sizeof( VkSemaphore ) );
+  if( UNLIKELY( !app->in_flight_fences) ) {
+    FATAL( "Failed to allocate" );
+  }
+
+  for( uint32_t i = 0; i < app->max_frames_in_flight; ++i ) {
+    VkSemaphoreCreateInfo sci[] = {{
+      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+      .pNext = NULL,
+      .flags = 0,
+    }};
+
+    VkFenceCreateInfo fci[] = {{
+      .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+      .pNext = NULL,
+      .flags = VK_FENCE_CREATE_SIGNALED_BIT, // start off "ready"
+    }};
+
+    res = vkCreateSemaphore( app->device, sci, NULL, app->image_avail_semaphores + i );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to create semaphore, err=%d", res );
+    }
+
+    res = vkCreateSemaphore( app->device, sci, NULL, app->render_finished_semaphores + i);
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to create semaphore, err=%d", res );
+    }
+
+    res = vkCreateFence( app->device, fci, NULL, app->in_flight_fences + i );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to create fence, err=%d", res );
+    }
+  }
+
   // we did it
 }
 
@@ -864,6 +912,12 @@ app_destroy( app_t* app )
 
   free( app->command_buffers );
 
+  for( uint32_t i = 0; i < app->max_frames_in_flight; ++i ) {
+    vkDestroySemaphore( app->device, app->image_avail_semaphores[i], NULL );
+    vkDestroySemaphore( app->device, app->render_finished_semaphores[i], NULL );
+    vkDestroyFence( app->device, app->in_flight_fences[i], NULL );
+  }
+
   vkDestroyDevice( app->device, NULL );
 }
 
@@ -887,50 +941,54 @@ mouse_button_callback( GLFWwindow* window,
 void
 app_run( app_t* app )
 {
-  VkDevice         device    = app->device;
-  VkQueue          queue     = app->queue;
-  VkSwapchainKHR   swapchain = app->swapchain;
-  VkCommandBuffer* commands  = app->command_buffers;
-  GLFWwindow*      window    = app->window;
+  VkResult res;
+
+  // save invariants for better codegen
+  VkDevice               device                     = app->device;
+  VkQueue                queue                      = app->queue;
+  VkSwapchainKHR         swapchain                  = app->swapchain;
+  VkCommandBuffer* const commands                   = app->command_buffers;
+  GLFWwindow*      const window                     = app->window;
+  const uint32_t         max_frames_in_flight       = app->max_frames_in_flight;
+  VkSemaphore* const     image_avail_semaphores     = app->image_avail_semaphores;
+  VkSemaphore* const     render_finished_semaphores = app->render_finished_semaphores;
+  VkFence* const         in_flight_fences           = app->in_flight_fences;
 
   glfwSetMouseButtonCallback( window, mouse_button_callback );
 
-  // any reason for these not to be local?
-  VkResult    res;
-  VkSemaphore image_avail;
-  VkSemaphore render_finished;
-
-  VkSemaphoreCreateInfo sci[] = {{
-    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-    .pNext = NULL,
-    .flags = 0,
-  }};
-
-  res = vkCreateSemaphore( device, sci, NULL, &image_avail );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create semaphore" );
-  }
-
-  res = vkCreateSemaphore( device, sci, NULL, &render_finished );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create semaphore" );
-  }
-
-  uint64_t last = wallclock();
+  uint32_t current_frame = 0;
   while( !glfwWindowShouldClose( window ) ) {
+    assert( current_frame < max_frames_in_flight );
+    LOG_INFO( "current_frame %u", current_frame );
+
     glfwPollEvents();
 
-    // something is not going right with the synchronization
-    uint32_t image_index;
-    res = vkAcquireNextImageKHR( device, swapchain, UINT64_MAX, image_avail, VK_NULL_HANDLE, &image_index );
+    // frame invariants
+    uint32_t             image_index     = 0;
+    VkSemaphore          image_avail     = image_avail_semaphores[current_frame];
+    VkSemaphore          render_finished = render_finished_semaphores[current_frame];
+    VkFence              fence           = in_flight_fences[current_frame];
+    VkPipelineStageFlags wait_stages[]   = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    VkSemaphore          wait_sems[]     = { image_avail };
+    VkSemaphore          signal_sems[]   = { render_finished };
+
+    // wait for this frame to be ready
+    res = vkWaitForFences( device, 1, &fence, VK_TRUE, UINT64_MAX );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
-      FATAL( "Faile to acquire image, err=%d", res );
+      FATAL( "Failed to wait for fence, err=%d", res );
     }
 
-    VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    VkSemaphore          wait_sems[]   = { image_avail };
-    VkSemaphore          signal_sems[] = { render_finished };
+    res = vkResetFences( device, 1, &fence );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to reset fence, err=%d", res );
+    }
 
+    res = vkAcquireNextImageKHR( device, swapchain, UINT64_MAX, image_avail, VK_NULL_HANDLE, &image_index );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failedk to acquire image, err=%d", res );
+    }
+
+    // requires image index
     VkSubmitInfo submit[] = {{
       .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
       .pNext                = NULL,
@@ -943,11 +1001,6 @@ app_run( app_t* app )
       .pSignalSemaphores    = signal_sems,
     }};
 
-    res = vkQueueSubmit( queue, 1, submit, VK_NULL_HANDLE );
-    if( UNLIKELY( res != VK_SUCCESS ) ) {
-      FATAL( "Failed to submit to queue, err=%d", res );
-    }
-
     VkPresentInfoKHR present_info[] = {{
       .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
       .pNext              = NULL,
@@ -959,21 +1012,35 @@ app_run( app_t* app )
       .pResults           = NULL,
     }};
 
+    // if we get an image index that isn't the current frame, we need to use the
+    // fence for the image-index we've received, not the current frame.
+    // would like to find a way to manage this without any additional tracking
+    // structures
+
+    if( image_index != current_frame ) FATAL( "oh no!" ); // shit.. still need a swizzler
+    LOG_INFO( "rendering to images %u", image_index );
+
+    res = vkQueueSubmit( queue, 1, submit, fence );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to submit to queue, err=%d", res );
+    }
+
     res = vkQueuePresentKHR( queue, present_info );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
       FATAL( "Failed to present image" );
     }
 
-    // FIXME hack, something is wrong with synchronuzatin
-    vkQueueWaitIdle( queue );
+    // FIXME understand the relationship between swapchain images and max in
+    // flight, shouldn't they always be equal? Why would I ever allocate more
+    // images than I plan to use to render?
+    // apparently some vulkan drivers will have a larger minimum number of
+    // images than what we might actually want. This probably doesn't matter,
+    // and I can probably work around it for now.
+    // FIXME enforce than number of images == max_in_flight to avoid having to
+    // add additional tracking structures.
 
-    uint64_t now = wallclock();
-    uint64_t dt  = now-last;
-    LOG_INFO( "now: %zu frame time %zu (%f fps)", now, dt, 1e9/(double)dt );
-
-    last = now;
+    // FIXME check codegen
+    current_frame += 1;
+    if( current_frame >= max_frames_in_flight ) current_frame = 0;
   }
-
-  vkDestroySemaphore( app->device, render_finished, NULL );
-  vkDestroySemaphore( app->device, image_avail, NULL );
 }

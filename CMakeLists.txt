@@ -11,12 +11,6 @@ string(APPEND CMAKE_C_FLAGS " -flto")
 string(APPEND CMAKE_C_FLAGS " -D_GNU_SOURCE")
 #string(APPEND CMAKE_C_FLAGS " -fsanitize=address")
 
-# hack to print __FILE__ paths relative to project root
-# cmake uses absolute paths for everything
-# seems fragile
-string(LENGTH "${CMAKE_SOURCE_DIR}/" SOURCE_PATH_SIZE)
-string(APPEND CMAKE_C_FLAGS " -D__FILE_HEADER_LEN__=${SOURCE_PATH_SIZE}")
-
 find_package(glfw3 REQUIRED)
 
 set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)

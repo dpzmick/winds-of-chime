@@ -36,6 +36,11 @@ struct app
 
   VkCommandPool      command_pool;
   VkCommandBuffer*   command_buffers;
+
+  uint32_t           max_frames_in_flight;
+  VkSemaphore*       image_avail_semaphores;
+  VkSemaphore*       render_finished_semaphores;
+  VkFence*           in_flight_fences;
 };
 
 void
