@@ -116,7 +116,7 @@ new_hashtable( size_t                key_footprint,
                hashtable_functions_t functions )
 {
   hashtable_t * ret = NULL;
-  int err = posix_memalign( (void*)&ret, alignof( *ret ), sizeof( *ret ) );
+  int err = posix_memalign( (void*)&ret, alignof( hashtable_t ), sizeof( *ret ) );
   if (err != 0) return NULL;
 
   size_t nf = INIT_SLOTS*node_footprint( key_footprint, key_align, value_footprint, value_align );

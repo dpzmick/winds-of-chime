@@ -4,10 +4,17 @@
 
 typedef void (*test_function_t)( );
 
-void test_register( char const * name, char const * tags, test_function_t fp );
-void test_check_result( bool cond, char const * file, int line, char const * info );
-void test_require_result( bool cond, char const * file, int line, char const * info );
-void run_tests( void );
+void
+test_register( char const * name, char const * tags, test_function_t fp );
+
+void __attribute__((noinline))
+test_check_result( bool cond, char const * file, int line, char const * info );
+
+void __attribute__((noinline))
+test_require_result( bool cond, char const * file, int line, char const * info );
+
+void
+run_tests( void );
 
 #define CHECK( cond )   test_check_result  ( !!(cond), __FILE__, __LINE__, "" #cond );
 #define REQUIRE( cond ) test_require_result( !!(cond), __FILE__, __LINE__, "" #cond );

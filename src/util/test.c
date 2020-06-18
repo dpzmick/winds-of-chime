@@ -48,7 +48,7 @@ test_register( char const *    name,
   all_program_tests = new_test;
 }
 
-void
+void __attribute__((noinline))
 test_check_result( bool         cond,
                    char const * file,
                    int          line,
@@ -60,7 +60,7 @@ test_check_result( bool         cond,
   __builtin_trap();
 }
 
-void
+void __attribute__((noinline))
 test_require_result( bool         cond,
                      char const * file,
                      int          line,
