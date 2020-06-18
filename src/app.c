@@ -516,9 +516,7 @@ app_init( app_t*     app,
 
   free( physical_devices );
 
-
-  // it's pipeline time
-
+  // it's pipelining time
 
   app->vert = create_shader( "src/vert.spv", app->device );
   app->frag = create_shader( "src/frag.spv", app->device );
@@ -831,8 +829,9 @@ app_init( app_t*     app,
     }
   }
 
+  app->max_frames_in_flight = 2;
+  LOG_INFO( "Using %u in flight frames", app->max_frames_in_flight );
 
-  app->max_frames_in_flight = app->n_swapchain_images; // FIXME set a bound on what is reasonable here
   app->image_avail_semaphores = malloc( app->max_frames_in_flight * sizeof( VkSemaphore ) );
   if( UNLIKELY( !app->image_avail_semaphores ) ) {
     FATAL( "Failed to allocate" );
@@ -956,14 +955,16 @@ app_run( app_t* app )
 
   glfwSetMouseButtonCallback( window, mouse_button_callback );
 
-  uint32_t current_frame = 0;
+  uint64_t current_frame = 0;
   while( !glfwWindowShouldClose( window ) ) {
-    assert( current_frame < max_frames_in_flight );
-    LOG_INFO( "current_frame %u", current_frame );
-
     glfwPollEvents();
 
-    // frame invariants
+    // we need two semaphores to synchronize this frame
+    // semaphores don't latch, they just trigger.
+    // the only important factor is that we only have one thing prepared to
+    // trigger each semaphore at the same time.
+    // for this reason, we have one semaphore per frame.
+
     uint32_t             image_index     = 0;
     VkSemaphore          image_avail     = image_avail_semaphores[current_frame];
     VkSemaphore          render_finished = render_finished_semaphores[current_frame];
@@ -972,7 +973,16 @@ app_run( app_t* app )
     VkSemaphore          wait_sems[]     = { image_avail };
     VkSemaphore          signal_sems[]   = { render_finished };
 
-    // wait for this frame to be ready
+    // acquireNextImage returns the index of the next image that we should use.
+    // The image isn't actually available until the semaphore becomes ready.
+    // this won't return 1,2,3,4,5,1,2,3,4,5,1,2,3,4,5.. seems to go in arbitrary order
+
+    res = vkAcquireNextImageKHR( device, swapchain, UINT64_MAX, image_avail, VK_NULL_HANDLE, &image_index );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failedk to acquire image, err=%d", res );
+    }
+
+    // wait for fences/sempahores to use with this frame
     res = vkWaitForFences( device, 1, &fence, VK_TRUE, UINT64_MAX );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
       FATAL( "Failed to wait for fence, err=%d", res );
@@ -983,12 +993,8 @@ app_run( app_t* app )
       FATAL( "Failed to reset fence, err=%d", res );
     }
 
-    res = vkAcquireNextImageKHR( device, swapchain, UINT64_MAX, image_avail, VK_NULL_HANDLE, &image_index );
-    if( UNLIKELY( res != VK_SUCCESS ) ) {
-      FATAL( "Failedk to acquire image, err=%d", res );
-    }
+    // these values all depend on the image which was selected
 
-    // requires image index
     VkSubmitInfo submit[] = {{
       .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
       .pNext                = NULL,
@@ -1001,6 +1007,7 @@ app_run( app_t* app )
       .pSignalSemaphores    = signal_sems,
     }};
 
+    // depends on address of image index (technically could be setup sooner)
     VkPresentInfoKHR present_info[] = {{
       .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
       .pNext              = NULL,
@@ -1012,14 +1019,6 @@ app_run( app_t* app )
       .pResults           = NULL,
     }};
 
-    // if we get an image index that isn't the current frame, we need to use the
-    // fence for the image-index we've received, not the current frame.
-    // would like to find a way to manage this without any additional tracking
-    // structures
-
-    if( image_index != current_frame ) FATAL( "oh no!" ); // shit.. still need a swizzler
-    LOG_INFO( "rendering to images %u", image_index );
-
     res = vkQueueSubmit( queue, 1, submit, fence );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
       FATAL( "Failed to submit to queue, err=%d", res );
@@ -1030,17 +1029,9 @@ app_run( app_t* app )
       FATAL( "Failed to present image" );
     }
 
-    // FIXME understand the relationship between swapchain images and max in
-    // flight, shouldn't they always be equal? Why would I ever allocate more
-    // images than I plan to use to render?
-    // apparently some vulkan drivers will have a larger minimum number of
-    // images than what we might actually want. This probably doesn't matter,
-    // and I can probably work around it for now.
-    // FIXME enforce than number of images == max_in_flight to avoid having to
-    // add additional tracking structures.
+    // rb_log_insert( log, fps_id, frame_fps );
 
-    // FIXME check codegen
     current_frame += 1;
-    if( current_frame >= max_frames_in_flight ) current_frame = 0;
+    if( current_frame >= max_frames_in_flight ) current_frame = 0; /* cmov */
   }
 }
