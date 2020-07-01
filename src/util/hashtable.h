@@ -1,5 +1,7 @@
 #pragma once
 
+// awkward and okayish performance hashtable (probably)
+
 #include <stdalign.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,6 +19,13 @@ typedef bool
 
 typedef void
 (*hashtable_obj_del)( void * k );
+
+enum {
+  HASHTABLE_INIT_SLOTS_DEFAULT = 1024,
+};
+
+// no move supported at the moment
+// don't store anything self-referential
 
 typedef struct {
   hashtable_key_hash key_hash;
@@ -44,17 +53,26 @@ new_hashtable( size_t                key_footprint,
                size_t                key_align,
                size_t                value_footprint,
                size_t                value_align,
+               size_t                init_slots,
                hashtable_functions_t functions );
 
 #define NEW_HASHTABLE( K, V )                          \
   new_hashtable( sizeof( K ), alignof( V ),            \
                  sizeof( V ), alignof( V ),            \
+                 HASHTABLE_INIT_SLOTS_DEFAULT,         \
                  hashtable_functions_empty )
 
 #define NEW_HASHTABLE_FUNCS( K, V, functions )         \
   new_hashtable( sizeof( K ), alignof( V ),            \
                  sizeof( V ), alignof( V ),            \
+                 HASHTABLE_INIT_SLOTS_DEFAULT,         \
                  functions )                           \
+
+#define NEW_HASHTABLE_SLOTS( K, V, slots )             \
+  new_hashtable( sizeof( K ), alignof( V ),            \
+                 sizeof( V ), alignof( V ),            \
+                 slots,                                \
+                 hashtable_functions_empty )           \
 
 // calls del on all stored keys and values
 void
@@ -98,4 +116,4 @@ hashtable_iter_delete( hashtable_iter_t * iter );
 hashtable_error_t
 hashtable_iter_next( hashtable_iter_t * iter,
                      void const * *     out_key,
-                     void * *           out_value );
+                     void const * *     out_value );
