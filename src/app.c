@@ -18,6 +18,17 @@
 static const uint32_t WIDTH  = 800;
 static const uint32_t HEIGHT = 600;
 
+typedef struct {
+  float pos[2];   // vec2
+  float color[3]; // vec3
+} vertex_t;
+
+static vertex_t triangle[] = {
+  { .pos = {  0.5f, -0.5f }, .color = { 1.0f, 0.0f, 0.0f } },
+  { .pos = {  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+  { .pos = { -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+};
+
 static char*
 read_entire_file( char const* filename,
                   size_t*     out_bytes )
@@ -190,6 +201,7 @@ select_physical_device( VkInstance   instance,
   return device;
 }
 
+// FIXME refator to not muck with app_t
 static void
 open_device( app_t *          app,
              VkPhysicalDevice physical_device,
@@ -327,7 +339,7 @@ pick_surface_present_mode( VkPhysicalDevice device,
 
   VkPresentModeKHR picked = VK_PRESENT_MODE_FIFO_KHR;
 
-#if 0 // let's just run at 60 fps
+#ifdef WOC_USE_MAILBOX
   // check if we support triple buffering
   for( uint32_t i = 0; i < count; ++i ) {
     VkPresentModeKHR m = modes[i];
@@ -479,72 +491,110 @@ create_swapchain( VkPhysicalDevice     phy,
   return swapchain;
 }
 
-static GLFWwindow*
-open_window( void )
+static VkPipelineLayout
+create_pipeline_layout( VkDevice device )
 {
-  // don't create any API context, not needed for vulkan
-  glfwWindowHint( GLFW_CLIENT_API, GLFW_NO_API );
+  VkResult         res;
+  VkPipelineLayout layout;
 
-  glfwWindowHint( GLFW_RESIZABLE, GLFW_FALSE );
-  glfwWindowHint( GLFW_FLOATING,  GLFW_TRUE );
+  VkPipelineLayoutCreateInfo pipeline_layout_ci[] = {{
+    .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    .pNext                  = NULL,
+    .flags                  = 0,
+    .setLayoutCount         = 0,
+    .pSetLayouts            = NULL,
+    .pushConstantRangeCount = 0,
+    .pPushConstantRanges    = NULL,
+  }};
 
-  // not sure how this interfacts with vulkan FIXME figure out
-  glfwWindowHint( GLFW_SCALE_TO_MONITOR, GLFW_TRUE );
-
-  GLFWwindow* window = glfwCreateWindow( (int)WIDTH, (int)HEIGHT, "Winds of Chime", NULL, NULL );
-  if( !window ) {
-    char const * desc;
-    int err = glfwGetError( &desc );
-    FATAL( "Failed to open GLFW window %s (%d)", desc, err );
+  res = vkCreatePipelineLayout( device, pipeline_layout_ci, NULL, &layout );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create pipeline layout, err=%d", res );
   }
 
-  return window;
+  return layout;
 }
 
-void
-app_init( app_t*     app,
-          VkInstance instance )
+static VkRenderPass
+create_render_pass( VkDevice                   device,
+                    VkSurfaceFormatKHR const * swapchain_surface_format )
 {
-  VkResult res;
 
-  app->instance = instance;
-  app->window = open_window();
-  res = glfwCreateWindowSurface( app->instance, app->window, NULL, &app->window_surface );
+  VkAttachmentDescription color_attach[] = {{
+    .flags          = 0,
+    .format         = swapchain_surface_format->format,
+    .samples        = VK_SAMPLE_COUNT_1_BIT,
+    .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+    .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+    .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+    .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+  }};
+
+  VkAttachmentReference attach_ref[] = {{
+    .attachment = 0,
+    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+  }};
+
+  VkSubpassDependency dependency[] = {{
+    .srcSubpass      = VK_SUBPASS_EXTERNAL,
+    .dstSubpass      = 0,
+    .srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .srcAccessMask   = 0,
+    .dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .dstAccessMask   = 0,
+    .dependencyFlags = 0,
+  }};
+
+  VkSubpassDescription subpass[] = {{
+    .flags                   = 0,
+    .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
+    .inputAttachmentCount    = 0,
+    .pInputAttachments       = NULL,
+    .colorAttachmentCount    = 1,
+    .pColorAttachments       = attach_ref,
+    .pResolveAttachments     = NULL,
+    .pDepthStencilAttachment = NULL,
+    .preserveAttachmentCount = 0,
+    .pPreserveAttachments    = NULL,
+  }};
+
+  VkRenderPassCreateInfo render_pass_ci[] = {{
+    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+    .pNext           = NULL,
+    .flags           = 0,
+    .attachmentCount = 1,
+    .pAttachments    = color_attach,
+    .subpassCount    = 1,
+    .pSubpasses      = subpass,
+    .dependencyCount = 1,
+    .pDependencies   = dependency,
+  }};
+
+  VkRenderPass render_pass;
+  VkResult res = vkCreateRenderPass( device, render_pass_ci, NULL, &render_pass );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create vulkan surface, err=%d", res );
+    FATAL( "Failed to create render pass, err=%d", res );
   }
 
-  glfwSetWindowUserPointer( app->window, app );
+  return render_pass;
+}
 
-  uint32_t queue_idx;
-  VkPhysicalDevice physical_device = select_physical_device( instance,
-                                                             app->window_surface,
-                                                             &queue_idx );
-
-  LOG_INFO( "Graphics queue at idx %u", queue_idx );
-
-  open_device( app, physical_device, queue_idx );
-  // open_memory( &app->coherent_memory, app->device, memory_idx );
-  // map_memory( &app->mapped_memory, app->device, app->coherent_memory );
-  app->swapchain = create_swapchain( physical_device, app->device, app->window_surface,
-                                     /* out */
-                                     &app->n_swapchain_images,
-                                     &app->swapchain_images,
-                                     app->swapchain_surface_format,
-                                     &app->image_views,
-                                     app->swapchain_extent );
-
-  // it's pipelining time
-
-  app->vert = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/vert.spv", app->device );
-  app->frag = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/frag.spv", app->device );
-
+static VkPipeline
+create_pipeline( VkDevice           device,
+                 VkPipelineLayout   layout,
+                 VkShaderModule     vertex_shader,
+                 VkShaderModule     fragment_shader,
+                 VkRenderPass       render_pass,
+                 VkExtent2D const * swapchain_extent )
+{
   VkPipelineShaderStageCreateInfo shader_stages[] = {{
     .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
     .pNext               = NULL,
     .flags               = 0,
     .stage               = VK_SHADER_STAGE_VERTEX_BIT,
-    .module              = app->vert,
+    .module              = vertex_shader,
     .pName               = "main",
     .pSpecializationInfo = NULL,
   }, {
@@ -552,17 +602,16 @@ app_init( app_t*     app,
     .pNext               = NULL,
     .flags               = 0,
     .stage               = VK_SHADER_STAGE_FRAGMENT_BIT,
-    .module              = app->frag,
+    .module              = fragment_shader,
     .pName               = "main",
     .pSpecializationInfo = NULL,
   }};
 
-  // describe the vertex data that is input to the vertex shader
-  // for now, basically empty
+  // describe the vertex data inputs for vertex shader
   VkPipelineVertexInputStateCreateInfo vert_input_ci[] = {{
-    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-    .pNext = NULL,
-    .flags = 0,
+    .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .pNext                           = NULL,
+    .flags                           = 0,
     .vertexBindingDescriptionCount   = 0,
     .pVertexBindingDescriptions      = NULL,
     .vertexAttributeDescriptionCount = 0,
@@ -581,15 +630,15 @@ app_init( app_t*     app,
   VkViewport viewport[1] = {{
     .x        = 0.0f,
     .y        = 0.0f,
-    .width    = (float)app->swapchain_extent->width,
-    .height   = (float)app->swapchain_extent->height,
+    .width    = (float)swapchain_extent->width,
+    .height   = (float)swapchain_extent->height,
     .minDepth = 0.0f,
     .maxDepth = 1.0f,
   }};
 
   VkRect2D scissor[] = {{
     .offset = (VkOffset2D){.x = 0, .y = 0},
-    .extent = *app->swapchain_extent,
+    .extent = *swapchain_extent,
   }};
 
   VkPipelineViewportStateCreateInfo viewport_ci[] = {{
@@ -646,80 +695,6 @@ app_init( app_t*     app,
     .blendConstants  = {0.0f, 0.0f, 0.0f, 0.0f},
   }};
 
-  VkPipelineLayoutCreateInfo pipeline_layout_ci[] = {{
-    .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-    .pNext                  = NULL,
-    .flags                  = 0,
-    .setLayoutCount         = 0,
-    .pSetLayouts            = NULL,
-    .pushConstantRangeCount = 0,
-    .pPushConstantRanges    = NULL,
-  }};
-
-  res = vkCreatePipelineLayout( app->device, pipeline_layout_ci, NULL, &app->pipeline_layout );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create pipeline layout, err=%d", res );
-  }
-
-  // -- render pass
-
-  VkAttachmentDescription color_attach[] = {{
-    .flags          = 0,
-    .format         = app->swapchain_surface_format->format,
-    .samples        = VK_SAMPLE_COUNT_1_BIT,
-    .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-    .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-    .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-    .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-    .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-  }};
-
-  VkAttachmentReference attach_ref[] = {{
-    .attachment = 0,
-    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-  }};
-
-  VkSubpassDependency dependency[] = {{
-    .srcSubpass      = VK_SUBPASS_EXTERNAL,
-    .dstSubpass      = 0,
-    .srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-    .srcAccessMask   = 0,
-    .dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-    .dstAccessMask   = 0,
-    .dependencyFlags = 0,
-  }};
-
-  VkSubpassDescription subpass[] = {{
-    .flags                   = 0,
-    .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
-    .inputAttachmentCount    = 0,
-    .pInputAttachments       = NULL,
-    .colorAttachmentCount    = 1,
-    .pColorAttachments       = attach_ref,
-    .pResolveAttachments     = NULL,
-    .pDepthStencilAttachment = NULL,
-    .preserveAttachmentCount = 0,
-    .pPreserveAttachments    = NULL,
-  }};
-
-  VkRenderPassCreateInfo render_pass_ci[] = {{
-    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-    .pNext           = NULL,
-    .flags           = 0,
-    .attachmentCount = 1,
-    .pAttachments    = color_attach,
-    .subpassCount    = 1,
-    .pSubpasses      = subpass,
-    .dependencyCount = 1,
-    .pDependencies   = dependency,
-  }};
-
-  res = vkCreateRenderPass( app->device, render_pass_ci, NULL, &app->render_pass );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to create render pass, err=%d", res );
-  }
-
   // -- pipeline
   VkGraphicsPipelineCreateInfo pipeline_ci[] = {{
     .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -736,17 +711,84 @@ app_init( app_t*     app,
     .pDepthStencilState  = NULL,
     .pColorBlendState    = blend_ci,
     .pDynamicState       = NULL,
-    .layout              = app->pipeline_layout,
-    .renderPass          = app->render_pass,
+    .layout              = layout,
+    .renderPass          = render_pass,
     .subpass             = 0,
     .basePipelineHandle  = VK_NULL_HANDLE,
     .basePipelineIndex   = -1,
   }};
 
-  res = vkCreateGraphicsPipelines( app->device, VK_NULL_HANDLE, 1, pipeline_ci, NULL, &app->graphics_pipeline );
+  VkPipeline pipeline;
+  VkResult res = vkCreateGraphicsPipelines( device, VK_NULL_HANDLE, 1, pipeline_ci, NULL, &pipeline );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to create graphics pipeline, err=%d", res );
   }
+
+  return pipeline;
+}
+
+static GLFWwindow*
+open_window( void )
+{
+  // don't create any API context, not needed for vulkan
+  glfwWindowHint( GLFW_CLIENT_API, GLFW_NO_API );
+
+  glfwWindowHint( GLFW_RESIZABLE, GLFW_FALSE );
+  glfwWindowHint( GLFW_FLOATING,  GLFW_TRUE );
+
+  // not sure how this interfacts with vulkan FIXME figure out
+  glfwWindowHint( GLFW_SCALE_TO_MONITOR, GLFW_TRUE );
+
+  GLFWwindow* window = glfwCreateWindow( (int)WIDTH, (int)HEIGHT, "Winds of Chime", NULL, NULL );
+  if( !window ) {
+    char const * desc;
+    int err = glfwGetError( &desc );
+    FATAL( "Failed to open GLFW window %s (%d)", desc, err );
+  }
+
+  return window;
+}
+
+void
+app_init( app_t*     app,
+          VkInstance instance )
+{
+  VkResult res;
+
+  app->instance = instance;
+  app->window = open_window();
+  res = glfwCreateWindowSurface( app->instance, app->window, NULL, &app->window_surface );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create vulkan surface, err=%d", res );
+  }
+
+  glfwSetWindowUserPointer( app->window, app );
+
+  uint32_t queue_idx;
+  VkPhysicalDevice physical_device = select_physical_device( instance,
+                                                             app->window_surface,
+                                                             &queue_idx );
+
+  LOG_INFO( "Graphics queue at idx %u", queue_idx );
+
+  open_device( app, physical_device, queue_idx );
+  // open_memory( &app->coherent_memory, app->device, memory_idx );
+  // map_memory( &app->mapped_memory, app->device, app->coherent_memory );
+  app->swapchain = create_swapchain( physical_device, app->device, app->window_surface,
+                                     /* out */
+                                     &app->n_swapchain_images,
+                                     &app->swapchain_images,
+                                     app->swapchain_surface_format,
+                                     &app->image_views,
+                                     app->swapchain_extent );
+
+  app->vert              = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/vert.spv", app->device );
+  app->frag              = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/frag.spv", app->device );
+  app->pipeline_layout   = create_pipeline_layout( app->device );
+  app->render_pass       = create_render_pass( app->device, app->swapchain_surface_format );
+  app->graphics_pipeline = create_pipeline( app->device, app->pipeline_layout,
+                                            app->vert, app->frag, app->render_pass,
+                                            app->swapchain_extent );
 
   app->framebuffers = malloc( app->n_swapchain_images * sizeof( *app->framebuffers) );
   if( UNLIKELY( !app->framebuffers ) ) {
