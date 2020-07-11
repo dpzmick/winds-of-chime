@@ -1,5 +1,7 @@
 #pragma once
 
+// pup: pointless ugly packer
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

@@ -41,6 +41,7 @@ struct app
   VkSemaphore*       image_avail_semaphores;
   VkSemaphore*       render_finished_semaphores;
   VkFence*           in_flight_fences;
+  VkFence*           images_in_flight;
 };
 
 void

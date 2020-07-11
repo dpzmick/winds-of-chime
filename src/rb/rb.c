@@ -27,11 +27,6 @@ typedef struct rb_schema_object {
   size_t              n_fields;
 } rb_schema_object_t;
 
-static uint64_t rb_schema_object_hash( rb_schema_object_t const * obj )
-{
-  // hash the object name
-}
-
 struct rb_schema {
   hashtable_t * objects; // object_id -> schema_object
 };

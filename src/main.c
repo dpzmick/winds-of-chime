@@ -76,6 +76,7 @@ create_instance( VkDebugUtilsMessengerEXT* out_messenger )
 
     for( size_t i = 0; i < validation_count; ++i ) {
       if( 0 == strcmp( props[ i ].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) ) {
+        // FIXME check
         enabled_layers[ enabled_layer_count++ ] = strdup( validation_layer );
         enabled_exts[ enabled_ext_count++ ]     = strdup( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
         do_validation = true;

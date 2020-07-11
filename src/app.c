@@ -15,8 +15,8 @@
 #include <string.h>
 #include <unistd.h>
 
-static const uint32_t WIDTH  = 640;
-static const uint32_t HEIGHT = 480;
+static const uint32_t WIDTH  = 800;
+static const uint32_t HEIGHT = 600;
 
 static char*
 read_entire_file( char const* filename,
@@ -196,7 +196,6 @@ pick_surface_format( VkPhysicalDevice device,
   }
 
   free( formats );
-
   return picked;
 }
 
@@ -220,9 +219,10 @@ pick_surface_present_mode( VkPhysicalDevice device,
     FATAL( "Failed to get swapchain present modes, err=%d", res );
   }
 
-  // check if we support triple buffering
-  // if not, just pick FIFO, since it's always available
   VkPresentModeKHR picked = VK_PRESENT_MODE_FIFO_KHR;
+
+//#if 0 // let's just run at 60 fps
+  // check if we support triple buffering
   for( uint32_t i = 0; i < count; ++i ) {
     VkPresentModeKHR m = modes[i];
     if( m != VK_PRESENT_MODE_MAILBOX_KHR ) continue;
@@ -230,6 +230,7 @@ pick_surface_present_mode( VkPhysicalDevice device,
     picked = m;
     break;
   }
+//#endif
 
   free( modes );
   return picked;
@@ -318,7 +319,7 @@ create_swapchain( VkPhysicalDevice     phy,
     FATAL( "Failed to create swapchain, err=%d", res );
   }
 
-  uint32_t n_swapchain_images;
+  uint32_t n_swapchain_images; // could be greater than image_count
 
   res = vkGetSwapchainImagesKHR( device, swapchain, &n_swapchain_images, NULL );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
@@ -518,8 +519,8 @@ app_init( app_t*     app,
 
   // it's pipelining time
 
-  app->vert = create_shader( "src/vert.spv", app->device );
-  app->frag = create_shader( "src/frag.spv", app->device );
+  app->vert = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/vert.spv", app->device );
+  app->frag = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/frag.spv", app->device );
 
   VkPipelineShaderStageCreateInfo shader_stages[] = {{
     .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -775,11 +776,11 @@ app_init( app_t*     app,
   }
 
   VkCommandBufferAllocateInfo cb_ci[] = {{
-    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-    .pNext = NULL,
-    .commandPool = app->command_pool,
-    .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-    .commandBufferCount = app->n_swapchain_images,
+    .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+    .pNext              = NULL,
+    .commandPool        = app->command_pool,
+    .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    .commandBufferCount = app->n_swapchain_images, // one draw command for each swapchain image
   }};
 
   res = vkAllocateCommandBuffers( app->device, cb_ci, app->command_buffers );
@@ -788,6 +789,7 @@ app_init( app_t*     app,
   }
 
   for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    // prerecord the commands for drawing
     VkCommandBuffer buffer = app->command_buffers[i];
     VkCommandBufferBeginInfo begin_info[] = {{
       .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -829,7 +831,7 @@ app_init( app_t*     app,
     }
   }
 
-  app->max_frames_in_flight = 2;
+  app->max_frames_in_flight = app->n_swapchain_images;
   LOG_INFO( "Using %u in flight frames", app->max_frames_in_flight );
 
   app->image_avail_semaphores = malloc( app->max_frames_in_flight * sizeof( VkSemaphore ) );
@@ -844,6 +846,11 @@ app_init( app_t*     app,
 
   app->in_flight_fences = malloc( app->max_frames_in_flight * sizeof( VkSemaphore ) );
   if( UNLIKELY( !app->in_flight_fences) ) {
+    FATAL( "Failed to allocate" );
+  }
+
+  app->images_in_flight = malloc( app->n_swapchain_images * sizeof( VkFence ) );
+  if( UNLIKELY( !app->images_in_flight ) ) {
     FATAL( "Failed to allocate" );
   }
 
@@ -876,6 +883,12 @@ app_init( app_t*     app,
     }
   }
 
+  // tracks if an image is currently being used by a previous frame render
+  // NULL_HANDLE to indicate that an image is not in use
+  for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    app->images_in_flight[i] = VK_NULL_HANDLE;
+  }
+
   // we did it
 }
 
@@ -883,13 +896,25 @@ void
 app_destroy( app_t* app )
 {
   if( !app ) return;
-  // close the window first
-  glfwDestroyWindow( app->window );
+
+  for( uint32_t i = 0; i < app->max_frames_in_flight; ++i ) {
+    vkDestroySemaphore( app->device, app->image_avail_semaphores[i], NULL );
+    vkDestroySemaphore( app->device, app->render_finished_semaphores[i], NULL );
+    vkDestroyFence( app->device, app->in_flight_fences[i], NULL );
+  }
+
+  free( app->images_in_flight );
+  free( app->in_flight_fences );
+  free( app->render_finished_semaphores );
+
+  // images_in_flight is only storing references to frame semaphores, no cleanup
+  // needed
 
   // then tear down in dag order
   for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
     vkDestroyImageView( app->device, app->image_views[i], NULL );
   }
+
   free( app->image_views );
   free( app->swapchain_images );
   vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
@@ -911,13 +936,10 @@ app_destroy( app_t* app )
 
   free( app->command_buffers );
 
-  for( uint32_t i = 0; i < app->max_frames_in_flight; ++i ) {
-    vkDestroySemaphore( app->device, app->image_avail_semaphores[i], NULL );
-    vkDestroySemaphore( app->device, app->render_finished_semaphores[i], NULL );
-    vkDestroyFence( app->device, app->in_flight_fences[i], NULL );
-  }
-
   vkDestroyDevice( app->device, NULL );
+
+  // close the window first
+  glfwDestroyWindow( app->window );
 }
 
 static void
@@ -952,18 +974,13 @@ app_run( app_t* app )
   VkSemaphore* const     image_avail_semaphores     = app->image_avail_semaphores;
   VkSemaphore* const     render_finished_semaphores = app->render_finished_semaphores;
   VkFence* const         in_flight_fences           = app->in_flight_fences;
+  VkFence* const         images_in_flight           = app->images_in_flight;
 
   glfwSetMouseButtonCallback( window, mouse_button_callback );
 
   uint64_t current_frame = 0;
   while( !glfwWindowShouldClose( window ) ) {
     glfwPollEvents();
-
-    // we need two semaphores to synchronize this frame
-    // semaphores don't latch, they just trigger.
-    // the only important factor is that we only have one thing prepared to
-    // trigger each semaphore at the same time.
-    // for this reason, we have one semaphore per frame.
 
     uint32_t             image_index     = 0;
     VkSemaphore          image_avail     = image_avail_semaphores[current_frame];
@@ -976,24 +993,22 @@ app_run( app_t* app )
     // acquireNextImage returns the index of the next image that we should use.
     // The image isn't actually available until the semaphore becomes ready.
     // this won't return 1,2,3,4,5,1,2,3,4,5,1,2,3,4,5.. seems to go in arbitrary order
+    // the image returned here might already be in use by another frame
+    // if it is, we'll also need to wait for the other frame to finish
 
     res = vkAcquireNextImageKHR( device, swapchain, UINT64_MAX, image_avail, VK_NULL_HANDLE, &image_index );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
-      FATAL( "Failedk to acquire image, err=%d", res );
+      FATAL( "Failed to acquire image, err=%d", res );
     }
 
-    // wait for fences/sempahores to use with this frame
+    // make sure the last render of this frame is finished
     res = vkWaitForFences( device, 1, &fence, VK_TRUE, UINT64_MAX );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
       FATAL( "Failed to wait for fence, err=%d", res );
     }
 
-    res = vkResetFences( device, 1, &fence );
-    if( UNLIKELY( res != VK_SUCCESS ) ) {
-      FATAL( "Failed to reset fence, err=%d", res );
-    }
-
     // these values all depend on the image which was selected
+    VkFence image_in_use = images_in_flight[image_index];
 
     VkSubmitInfo submit[] = {{
       .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -1019,6 +1034,23 @@ app_run( app_t* app )
       .pResults           = NULL,
     }};
 
+    // make sure the image is not in use by any other frames
+    if( image_in_use != VK_NULL_HANDLE ) {
+      // NOTE: this is a reference to some frame's fence
+      // NOTE: if image_idx == frame_idx, we'll have waited on the frame fence
+      // twice. this is okay, since we havne't reset the fence yet.
+      res = vkWaitForFences( device, 1, &image_in_use, VK_TRUE, UINT64_MAX );
+      if( UNLIKELY( res != VK_SUCCESS ) ) {
+        FATAL( "Failed to wait for fence, err=%d", res );
+      }
+    }
+
+    // clear frame fence
+    res = vkResetFences( device, 1, &fence );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to reset fence, err=%d", res );
+    }
+
     res = vkQueueSubmit( queue, 1, submit, fence );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
       FATAL( "Failed to submit to queue, err=%d", res );
@@ -1029,9 +1061,13 @@ app_run( app_t* app )
       FATAL( "Failed to present image" );
     }
 
-    // rb_log_insert( log, fps_id, frame_fps );
+    // save the fence for future frames that select this image
+    images_in_flight[image_index] = fence;
 
     current_frame += 1;
     if( current_frame >= max_frames_in_flight ) current_frame = 0; /* cmov */
   }
+
+  // wait for all outstanding requests to finish
+  vkDeviceWaitIdle( device );
 }

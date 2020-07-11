@@ -30,7 +30,7 @@ log_impl( char const* file,
 
   strftime(tm, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 
-  fprintf(stderr, "%-5s %s %s:%d: ", hdr, tm, file, line);
+  fprintf(stderr, "%-5s %s %s:%-4d: ", hdr, tm, file, line);
   vfprintf(stderr, fmt, args);
   fprintf(stderr, "\n");
 
