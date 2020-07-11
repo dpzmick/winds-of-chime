@@ -68,32 +68,32 @@ create_instance( VkDebugUtilsMessengerEXT* out_messenger )
 
   bool     do_validation    = false;
   uint32_t validation_count = 0;
-  vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, NULL );
-  if( vk_res == VK_SUCCESS ) {
-    VkExtensionProperties* props = malloc( sizeof( *props )*validation_count );
-    vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, props );
-    if( UNLIKELY( vk_res != VK_SUCCESS ) ) FATAL( "Failed to get extensions for validation layer" );
+  /* vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, NULL ); */
+  /* if( vk_res == VK_SUCCESS ) { */
+  /*   VkExtensionProperties* props = malloc( sizeof( *props )*validation_count ); */
+  /*   vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, props ); */
+  /*   if( UNLIKELY( vk_res != VK_SUCCESS ) ) FATAL( "Failed to get extensions for validation layer" ); */
 
-    for( size_t i = 0; i < validation_count; ++i ) {
-      if( 0 == strcmp( props[ i ].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) ) {
-        // FIXME check
-        enabled_layers[ enabled_layer_count++ ] = strdup( validation_layer );
-        enabled_exts[ enabled_ext_count++ ]     = strdup( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
-        do_validation = true;
-        break;
-      }
-    }
-    free( props );
+  /*   for( size_t i = 0; i < validation_count; ++i ) { */
+  /*     if( 0 == strcmp( props[ i ].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) ) { */
+  /*       // FIXME check */
+  /*       enabled_layers[ enabled_layer_count++ ] = strdup( validation_layer ); */
+  /*       enabled_exts[ enabled_ext_count++ ]     = strdup( VK_EXT_DEBUG_UTILS_EXTENSION_NAME ); */
+  /*       do_validation = true; */
+  /*       break; */
+  /*     } */
+  /*   } */
+  /*   free( props ); */
 
-    if( !do_validation ) {
-      LOG_INFO( "Failed to find extension for debug messaging" );
-    }
-  }
-  else {
-    LOG_INFO( "Failed to get extensions for layer %s."
-              " Disabling debug layers",
-              validation_layer );
-  }
+  /*   if( !do_validation ) { */
+  /*     LOG_INFO( "Failed to find extension for debug messaging" ); */
+  /*   } */
+  /* } */
+  /* else { */
+  /*   LOG_INFO( "Failed to get extensions for layer %s." */
+  /*             " Disabling debug layers", */
+  /*             validation_layer ); */
+  /* } */
 
   VkInstanceCreateInfo instance_create_info[1] = {{
     .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,

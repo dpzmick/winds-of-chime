@@ -127,7 +127,8 @@ get_physical_devices( VkInstance instance,
 static VkPhysicalDevice
 select_physical_device( VkInstance   instance,
                         VkSurfaceKHR window_surface,
-                        uint32_t *   out_queue_idx )
+                        uint32_t *   out_queue_idx,
+                        uint32_t *   out_memory_idx )
 {
   VkResult                 res;
   VkQueueFamilyProperties* props    = NULL;
@@ -136,6 +137,7 @@ select_physical_device( VkInstance   instance,
   // outparams
   VkPhysicalDevice device         = VK_NULL_HANDLE;
   uint32_t         graphics_queue = (uint32_t)-1;
+  uint32_t         memory_idx     = (uint32_t)-1;
 
   uint32_t           device_count;
   VkPhysicalDevice * devices = get_physical_devices( instance, &device_count );
@@ -152,7 +154,8 @@ select_physical_device( VkInstance   instance,
 
     // need queues for graphics, present, and transfer
     // for now, assuming that a queue with GRAPHICS_BIT implies all of the above
-    bool found_queue = false;
+    bool     found_queue = false;
+    bool     found_mem   = false;
 
     for( uint32_t j = 0; j < prop_cnt; ++j ) {
       VkQueueFlags flags = props[i].queueFlags;
@@ -167,24 +170,21 @@ select_physical_device( VkInstance   instance,
       break;
     }
 
-    /* uint32_t memory_idx = 0; */
-    /* bool     found_mem  = false; */
+    VkPhysicalDeviceMemoryProperties mem_props[1];
+    vkGetPhysicalDeviceMemoryProperties( dev, mem_props );
 
-    /* VkPhysicalDeviceMemoryProperties mem_props[1]; */
-    /* vkGetPhysicalDeviceMemoryProperties( dev, mem_props ); */
+    // for now, find a coherant memory which is host visible
+    uint32_t            n_mem = mem_props->memoryTypeCount;
+    VkMemoryType const* mt    = mem_props->memoryTypes;
+    for( uint32_t j = 0; j < n_mem; ++j ) {
+      if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) {
+        memory_idx = j;
+        found_mem = true;
+        break;
+      }
+    }
 
-    /* uint32_t            n_mem = mem_props->memoryTypeCount; */
-    /* VkMemoryType const* mt    = mem_props->memoryTypes; */
-    /* for( uint32_t j = 0; j < n_mem; ++j ) { */
-    /*   if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) { */
-    /*     memory_idx = j; */
-    /*     found_mem = true; */
-    /*     break; */
-    /*   } */
-    /* } */
-
-
-    if( found_queue ) {
+    if( found_queue && found_mem ) {
       device = dev;
       break;
     }
@@ -197,7 +197,8 @@ select_physical_device( VkInstance   instance,
     FATAL( "No acceptable device found" );
   }
 
-  *out_queue_idx = graphics_queue;
+  *out_queue_idx  = graphics_queue;
+  *out_memory_idx = memory_idx;
   return device;
 }
 
@@ -246,37 +247,6 @@ open_device( app_t *          app,
 
   vkGetDeviceQueue( device, queue_idx, 0, &app->queue );
   app->device = device;
-}
-
-static void
-open_memory( VkDeviceMemory* memory,
-             VkDevice        device,
-             uint32_t        memory_type_idx,
-             uint32_t        sz )
-{
-  VkMemoryAllocateInfo info[] = {{
-      .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-      .pNext           = NULL,
-      .allocationSize  = sz,
-      .memoryTypeIndex = memory_type_idx,
-  }};
-
-  VkResult res = vkAllocateMemory( device, info, NULL, memory );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to allocate memory on device, ret=%d", res );
-  }
-}
-
-static void
-map_memory( void volatile** map_to,
-            uint32_t        sz,
-            VkDevice        device,
-            VkDeviceMemory  memory )
-{
-  VkResult res = vkMapMemory( device, memory, 0, sz, 0, (void**)map_to );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to map memory" );
-  }
 }
 
 static VkSurfaceFormatKHR
@@ -339,6 +309,7 @@ pick_surface_present_mode( VkPhysicalDevice device,
 
   VkPresentModeKHR picked = VK_PRESENT_MODE_FIFO_KHR;
 
+#define WOC_USE_MAILBOX
 #ifdef WOC_USE_MAILBOX
   // check if we support triple buffering
   for( uint32_t i = 0; i < count; ++i ) {
@@ -405,7 +376,7 @@ create_swapchain( VkPhysicalDevice     phy,
   surface_format       = pick_surface_format( phy, surface );
   surface_present_mode = pick_surface_present_mode( phy, surface );
   surface_swap_extent  = pick_swap_extent( caps );
-  image_count          = caps->minImageCount + 1;
+  image_count          = caps->minImageCount + 30;
 
   // if zero, there's no max
   if( caps->maxImageCount ) image_count = MIN( image_count, caps->maxImageCount );
@@ -489,6 +460,65 @@ create_swapchain( VkPhysicalDevice     phy,
   *out_surface_format     = surface_format;
   *out_image_views        = image_views;
   return swapchain;
+}
+
+static VkBuffer
+create_vertex_buffer( VkDevice device,
+                      uint32_t size )
+{
+  VkBufferCreateInfo buffer_ci[] = {{
+    .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    .pNext                 = NULL,
+    .flags                 = 0,
+    .size                  = size,
+    .usage                 = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
+    .queueFamilyIndexCount = 0,
+    .pQueueFamilyIndices   = NULL, // not needed when not sharing mode CONCURRENT
+  }};
+
+  VkBuffer buffer;
+  VkResult res = vkCreateBuffer( device, buffer_ci, NULL, &buffer );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to create vertex buffer, err=%d", res );
+  }
+
+  return buffer;
+}
+
+static VkDeviceMemory
+allocate_vertex_buffer( VkDevice     device,
+                        VkDeviceSize size,
+                        uint32_t     memory_index )
+{
+  VkMemoryAllocateInfo alloc_info[] = {{
+    .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+    .pNext           = NULL,
+    .allocationSize  = size,
+    .memoryTypeIndex = memory_index,
+  }};
+
+  VkDeviceMemory mem;
+  VkResult res = vkAllocateMemory( device, alloc_info, NULL, &mem );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to allocate device memory, err=%d", res );
+  }
+
+  return mem;
+}
+
+static void *
+map_memory( VkDevice       device,
+            uint32_t       sz,
+            VkDeviceMemory memory )
+{
+  void* map_to;
+  VkResult res = vkMapMemory( device, memory, 0, sz, 0, &map_to );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to map memory" );
+  }
+
+  return map_to;
 }
 
 static VkPipelineLayout
@@ -607,15 +637,33 @@ create_pipeline( VkDevice           device,
     .pSpecializationInfo = NULL,
   }};
 
+  VkVertexInputBindingDescription binding_desc[] = {{
+    .binding   = 0,
+    .stride    = sizeof( vertex_t ),
+    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+  }};
+
+  VkVertexInputAttributeDescription attr_desc[] = {{
+    .binding  = 0,
+    .location = 0,
+    .format   = VK_FORMAT_R32G32_SFLOAT,
+    .offset   = offsetof( vertex_t, pos ),
+  }, {
+    .binding  = 0,
+    .location = 1,
+    .format   = VK_FORMAT_R32G32B32_SFLOAT,
+    .offset   = offsetof( vertex_t, color ),
+  }};
+
   // describe the vertex data inputs for vertex shader
   VkPipelineVertexInputStateCreateInfo vert_input_ci[] = {{
     .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .pNext                           = NULL,
     .flags                           = 0,
-    .vertexBindingDescriptionCount   = 0,
-    .pVertexBindingDescriptions      = NULL,
-    .vertexAttributeDescriptionCount = 0,
-    .pVertexAttributeDescriptions    = NULL,
+    .vertexBindingDescriptionCount   = ARRAY_SIZE( binding_desc ),
+    .pVertexBindingDescriptions      = binding_desc,
+    .vertexAttributeDescriptionCount = ARRAY_SIZE( attr_desc ),
+    .pVertexAttributeDescriptions    = attr_desc,
   }};
 
   // describe what kind of geometry will be drawn
@@ -765,9 +813,11 @@ app_init( app_t*     app,
   glfwSetWindowUserPointer( app->window, app );
 
   uint32_t queue_idx;
+  uint32_t memory_idx;
   VkPhysicalDevice physical_device = select_physical_device( instance,
                                                              app->window_surface,
-                                                             &queue_idx );
+                                                             &queue_idx,
+                                                             &memory_idx );
 
   LOG_INFO( "Graphics queue at idx %u", queue_idx );
 
@@ -782,13 +832,33 @@ app_init( app_t*     app,
                                      &app->image_views,
                                      app->swapchain_extent );
 
-  app->vert              = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/vert.spv", app->device );
-  app->frag              = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/frag.spv", app->device );
+  app->vert = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/vert.spv", app->device );
+  app->frag = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/frag.spv", app->device );
+
   app->pipeline_layout   = create_pipeline_layout( app->device );
   app->render_pass       = create_render_pass( app->device, app->swapchain_surface_format );
   app->graphics_pipeline = create_pipeline( app->device, app->pipeline_layout,
                                             app->vert, app->frag, app->render_pass,
                                             app->swapchain_extent );
+
+  // -- allocate vertex buffer
+  app->vertex_buffer = create_vertex_buffer( app->device, sizeof( triangle ) );
+
+  // device might have minimum memory size
+  VkMemoryRequirements mem_req[1];
+  vkGetBufferMemoryRequirements( app->device, app->vertex_buffer, mem_req );
+
+  app->vertex_memory = allocate_vertex_buffer( app->device, MAX( (VkDeviceSize)sizeof( triangle ), mem_req->size ), memory_idx );
+
+  // bind the allocated memory at offset 0
+  res = vkBindBufferMemory( app->device, app->vertex_buffer, app->vertex_memory, 0 );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to bind memory, err=%d", res );
+  }
+
+  void* data = map_memory( app->device, sizeof( triangle ), app->vertex_memory );
+  memcpy( data, triangle, sizeof( triangle ) );
+  vkUnmapMemory( app->device, app->vertex_memory );
 
   app->framebuffers = malloc( app->n_swapchain_images * sizeof( *app->framebuffers) );
   if( UNLIKELY( !app->framebuffers ) ) {
@@ -881,7 +951,8 @@ app_init( app_t*     app,
 
     vkCmdBeginRenderPass( buffer, render_pass_info, VK_SUBPASS_CONTENTS_INLINE );
     vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->graphics_pipeline );
-    vkCmdDraw( buffer, 3, 1, 0, 0 );
+    vkCmdBindVertexBuffers( buffer, 0, 1, &app->vertex_buffer, &(VkDeviceSize){0} );
+    vkCmdDraw( buffer, ARRAY_SIZE( triangle ), 1, 0, 0 );
     vkCmdEndRenderPass( buffer );
 
     res = vkEndCommandBuffer( buffer );
@@ -978,6 +1049,9 @@ app_destroy( app_t* app )
   free( app->swapchain_images );
   vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
   vkDestroySurfaceKHR( app->instance, app->window_surface, NULL );
+
+  vkDestroyBuffer( app->device, app->vertex_buffer, NULL );
+  vkFreeMemory( app->device, app->vertex_memory, NULL );
 
   vkDestroyShaderModule( app->device, app->vert, NULL );
   vkDestroyShaderModule( app->device, app->frag, NULL );
