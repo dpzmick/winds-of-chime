@@ -84,6 +84,112 @@ create_shader( char const * fname,
   return shader;
 }
 
+static VkPhysicalDevice*
+get_physical_devices( VkInstance instance,
+                      uint32_t * out_device_count )
+{
+  VkResult res;
+  uint32_t          physical_device_count = 0;
+  VkPhysicalDevice* physical_devices      = NULL;
+
+  res = vkEnumeratePhysicalDevices( instance, &physical_device_count, NULL );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to enumerate devices ret=%d", res );
+  }
+
+  LOG_INFO( "Found %u physical devices", physical_device_count );
+
+  physical_devices = malloc( physical_device_count * sizeof( *physical_devices ));
+  if( UNLIKELY( physical_devices == NULL ) ) {
+    FATAL( "Failed to allocate physical devices" );
+  }
+
+  res = vkEnumeratePhysicalDevices( instance, &physical_device_count, physical_devices );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to enumerate physical devices the second time, ret=%d", res );
+  }
+
+  *out_device_count = physical_device_count;
+  return physical_devices;
+}
+
+static VkPhysicalDevice
+select_physical_device( VkInstance   instance,
+                        VkSurfaceKHR window_surface,
+                        uint32_t *   out_queue_idx )
+{
+  VkResult                 res;
+  VkQueueFamilyProperties* props    = NULL;
+  uint32_t                 prop_cnt = 0;
+
+  // outparams
+  VkPhysicalDevice device         = VK_NULL_HANDLE;
+  uint32_t         graphics_queue = (uint32_t)-1;
+
+  uint32_t           device_count;
+  VkPhysicalDevice * devices = get_physical_devices( instance, &device_count );
+
+  for( uint32_t i = 0; i < device_count; ++i ) {
+    VkPhysicalDevice dev = devices[i];
+
+    vkGetPhysicalDeviceQueueFamilyProperties( dev, &prop_cnt, NULL );
+
+    props = realloc( props, sizeof( *props ) * prop_cnt );
+    if( !props ) FATAL( "Failed to allocate memory" );
+
+    vkGetPhysicalDeviceQueueFamilyProperties( dev, &prop_cnt, props );
+
+    // need queues for graphics, present, and transfer
+    // for now, assuming that a queue with GRAPHICS_BIT implies all of the above
+    bool found_queue = false;
+
+    for( uint32_t j = 0; j < prop_cnt; ++j ) {
+      VkQueueFlags flags = props[i].queueFlags;
+      VkBool32     present;
+      res = vkGetPhysicalDeviceSurfaceSupportKHR( dev, j, window_surface, &present );
+
+      if( !present ) continue;
+      if( !(flags & VK_QUEUE_GRAPHICS_BIT) ) continue;
+
+      graphics_queue = j;
+      found_queue = true;
+      break;
+    }
+
+    /* uint32_t memory_idx = 0; */
+    /* bool     found_mem  = false; */
+
+    /* VkPhysicalDeviceMemoryProperties mem_props[1]; */
+    /* vkGetPhysicalDeviceMemoryProperties( dev, mem_props ); */
+
+    /* uint32_t            n_mem = mem_props->memoryTypeCount; */
+    /* VkMemoryType const* mt    = mem_props->memoryTypes; */
+    /* for( uint32_t j = 0; j < n_mem; ++j ) { */
+    /*   if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) { */
+    /*     memory_idx = j; */
+    /*     found_mem = true; */
+    /*     break; */
+    /*   } */
+    /* } */
+
+
+    if( found_queue ) {
+      device = dev;
+      break;
+    }
+  }
+
+  free( props );
+  free( devices );
+
+  if( UNLIKELY( device == VK_NULL_HANDLE ) ) {
+    FATAL( "No acceptable device found" );
+  }
+
+  *out_queue_idx = graphics_queue;
+  return device;
+}
+
 static void
 open_device( app_t *          app,
              VkPhysicalDevice physical_device,
@@ -221,7 +327,7 @@ pick_surface_present_mode( VkPhysicalDevice device,
 
   VkPresentModeKHR picked = VK_PRESENT_MODE_FIFO_KHR;
 
-//#if 0 // let's just run at 60 fps
+#if 0 // let's just run at 60 fps
   // check if we support triple buffering
   for( uint32_t i = 0; i < count; ++i ) {
     VkPresentModeKHR m = modes[i];
@@ -230,7 +336,7 @@ pick_surface_present_mode( VkPhysicalDevice device,
     picked = m;
     break;
   }
-//#endif
+#endif
 
   free( modes );
   return picked;
@@ -410,112 +516,23 @@ app_init( app_t*     app,
 
   glfwSetWindowUserPointer( app->window, app );
 
-  uint32_t physical_device_count = 0;
-  res = vkEnumeratePhysicalDevices( instance, &physical_device_count, NULL );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to enumerate devices ret=%d", res );
-  }
+  uint32_t queue_idx;
+  VkPhysicalDevice physical_device = select_physical_device( instance,
+                                                             app->window_surface,
+                                                             &queue_idx );
 
-  LOG_INFO( "Found %u physical devices", physical_device_count );
+  LOG_INFO( "Graphics queue at idx %u", queue_idx );
 
-  size_t sz = physical_device_count * sizeof( VkPhysicalDevice );
-  VkPhysicalDevice* physical_devices = malloc( sz );
-  if( UNLIKELY( physical_devices == NULL ) ) {
-    FATAL( "Failed to allocate physical devices" );
-  }
-
-  res = vkEnumeratePhysicalDevices( instance, &physical_device_count, physical_devices );
-  if( UNLIKELY( res != VK_SUCCESS ) ) {
-    FATAL( "Failed to enumerate physical devices the second time, ret=%d", res );
-  }
-
-  bool found_device = false;
-
-  for( uint32_t i = 0; i < physical_device_count; ++i ) {
-    VkPhysicalDevice dev = physical_devices[i];
-
-    VkQueueFamilyProperties* props    = NULL;
-    uint32_t                 prop_cnt = 0;
-
-    vkGetPhysicalDeviceQueueFamilyProperties( dev, &prop_cnt, NULL );
-    props = malloc( sizeof( *props ) * prop_cnt );
-    if( !props ) FATAL( "Failed to allocate memory" );
-
-    vkGetPhysicalDeviceQueueFamilyProperties( dev, &prop_cnt, props );
-
-    // graphics implies transfer
-    // need a graphics queue which supports present as well
-    uint32_t graphics_queue = 0;
-    bool     found_queue    = false;
-
-    for( uint32_t j = 0; j < prop_cnt; ++j ) {
-      VkQueueFlags flags = props[i].queueFlags;
-      VkBool32     present;
-      res = vkGetPhysicalDeviceSurfaceSupportKHR( dev, j, app->window_surface, &present );
-
-      if( !present ) continue;
-      if( !(flags & VK_QUEUE_GRAPHICS_BIT) ) continue;
-
-      // forcing graphics queue and present queue to be same queue
-      // FIXME this probably doens't work everywhere?
-      graphics_queue = j;
-      found_queue    = true;
-      break;
-    }
-
-    /* uint32_t memory_idx = 0; */
-    /* bool     found_mem  = false; */
-
-    /* VkPhysicalDeviceMemoryProperties mem_props[1]; */
-    /* vkGetPhysicalDeviceMemoryProperties( dev, mem_props ); */
-
-    /* uint32_t            n_mem = mem_props->memoryTypeCount; */
-    /* VkMemoryType const* mt    = mem_props->memoryTypes; */
-    /* for( uint32_t j = 0; j < n_mem; ++j ) { */
-    /*   if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) { */
-    /*     memory_idx = j; */
-    /*     found_mem = true; */
-    /*     break; */
-    /*   } */
-    /* } */
-
-    if( LIKELY( found_queue ) ) {
-      // LOG_INFO( "Found memory at idx %u", memory_idx );
-      LOG_INFO( "Graphics queue at idx %u", graphics_queue );
-
-      open_device( app, dev, graphics_queue );
-      // open_memory( &app->coherent_memory, app->device, memory_idx );
-      // map_memory( &app->mapped_memory, app->device, app->coherent_memory );
-      app->swapchain = create_swapchain( dev, app->device, app->window_surface,
-                                         /* out */
-                                         &app->n_swapchain_images,
-                                         &app->swapchain_images,
-                                         app->swapchain_surface_format,
-                                         &app->image_views,
-                                         app->swapchain_extent );
-
-      // FIXME maybe store extent, tutorial says to..
-
-      found_device = true;
-      free( props );
-      break;
-    }
-    else {
-      bool found_mem = false;
-      LOG_INFO( "Device %u not valid. found memory? %s found_queue %s", i,
-                ( found_mem   ? "YES" : "NO" ),
-                ( found_queue ? "YES" : "NO" ) );
-
-    }
-
-    free( props );
-  }
-
-  if( UNLIKELY( !found_device ) ) {
-    FATAL( "No acceptable device found" );
-  }
-
-  free( physical_devices );
+  open_device( app, physical_device, queue_idx );
+  // open_memory( &app->coherent_memory, app->device, memory_idx );
+  // map_memory( &app->mapped_memory, app->device, app->coherent_memory );
+  app->swapchain = create_swapchain( physical_device, app->device, app->window_surface,
+                                     /* out */
+                                     &app->n_swapchain_images,
+                                     &app->swapchain_images,
+                                     app->swapchain_surface_format,
+                                     &app->image_views,
+                                     app->swapchain_extent );
 
   // it's pipelining time
 
