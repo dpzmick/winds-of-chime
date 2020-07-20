@@ -1,6 +1,7 @@
 #include "foo.h"
 
 #include <stdio.h>
+#include <stdbool.h>
 
 #define ARRAY_SIZE( arr ) ( sizeof( arr )/sizeof( *arr ) )
 
@@ -19,7 +20,7 @@ int main() {
   int8_t buf[10] = {0};
 
   foo_t foo[1];
-  foo_init( foo, 10, ARRAY_SIZE( arr ), arr, buf );
+  foo_reset( foo, 10, ARRAY_SIZE( arr ), arr, buf );
 
   printf( "arr_sz = %d\n", foo_get_arr_sz( foo ) );
 
@@ -30,7 +31,7 @@ int main() {
     uint64_t start = 0;
     uint64_t end   = 0;
 
-    frame_timer_init( timer, start, end );
+    frame_timer_reset( timer, start, end );
     tracer_write_pup( tracer, timer );
   }
 }

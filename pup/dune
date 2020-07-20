@@ -1,2 +1,3 @@
 (executable
- (name simple))
+ (name simple)
+ (modules_without_implementation pupTypes))

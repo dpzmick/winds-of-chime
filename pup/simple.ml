@@ -1,4 +1,4 @@
-open Pup
+open PupTypes
 
 let foo = Pup.structure [
     ("type",   U8);
@@ -14,16 +14,19 @@ let frame_timer = Pup.structure [
 
 (* Generate a C generic macro for easy logging into a tracer *)
 
-let generate_tracer_helper c_ids_and_types =
-  let f (c_id, c_typename) =
+let c_generate_tracer_helper doc =
+  let variant c_id_val c_type_name =
     Printf.sprintf "  %s*: tracer_write( (tracer), %s, (message), sizeof( %s ) )"
-      c_typename c_id c_typename
+      c_type_name
+      c_id_val
+      c_type_name
   in
-  let each_type = List.map f c_ids_and_types in
-  Printf.sprintf "#define tracer_write_pup( tracer, message ) _Generic( (message),\\\n%s)\n"
-    (String.concat ",\\\n" each_type)
+  Printf.sprintf "#define tracer_write_pup( tracer, message ) _Generic( (message),\\\n%s )\n"
+    (String.concat ", \\\n" (PupC.c_map_ids variant doc))
+
+let doc = Pup.document [("foo", foo);
+                        ("frame_timer", frame_timer);]
 
 let () =
-  Pup.document [("foo", foo); ("frame_timer", frame_timer);]
-  |> PupC.create generate_tracer_helper
+  PupC.create_with_extra doc (c_generate_tracer_helper doc)
   |> print_string
