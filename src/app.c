@@ -1,6 +1,6 @@
 #include "app.h"
 #include "common.h"
-#include "log.h"
+#include "util/log.h"
 
 #include "volk.h"
 
@@ -24,9 +24,9 @@ typedef struct {
 } vertex_t;
 
 static vertex_t triangle[] = {
-  { .pos = {  0.5f, -0.5f }, .color = { 1.0f, 0.0f, 0.0f } },
+  { .pos = {  0.0f, -0.5f }, .color = { 1.0f, 0.0f, 0.0f } },
   { .pos = {  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
-  { .pos = { -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .pos = { -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
 };
 
 static char*
@@ -309,7 +309,6 @@ pick_surface_present_mode( VkPhysicalDevice device,
 
   VkPresentModeKHR picked = VK_PRESENT_MODE_FIFO_KHR;
 
-#define WOC_USE_MAILBOX
 #ifdef WOC_USE_MAILBOX
   // check if we support triple buffering
   for( uint32_t i = 0; i < count; ++i ) {
@@ -376,7 +375,7 @@ create_swapchain( VkPhysicalDevice     phy,
   surface_format       = pick_surface_format( phy, surface );
   surface_present_mode = pick_surface_present_mode( phy, surface );
   surface_swap_extent  = pick_swap_extent( caps );
-  image_count          = caps->minImageCount + 30;
+  image_count          = caps->minImageCount + 1;
 
   // if zero, there's no max
   if( caps->maxImageCount ) image_count = MIN( image_count, caps->maxImageCount );
@@ -822,8 +821,6 @@ app_init( app_t*     app,
   LOG_INFO( "Graphics queue at idx %u", queue_idx );
 
   open_device( app, physical_device, queue_idx );
-  // open_memory( &app->coherent_memory, app->device, memory_idx );
-  // map_memory( &app->mapped_memory, app->device, app->coherent_memory );
   app->swapchain = create_swapchain( physical_device, app->device, app->window_surface,
                                      /* out */
                                      &app->n_swapchain_images,
@@ -856,9 +853,8 @@ app_init( app_t*     app,
     FATAL( "Failed to bind memory, err=%d", res );
   }
 
-  void* data = map_memory( app->device, sizeof( triangle ), app->vertex_memory );
-  memcpy( data, triangle, sizeof( triangle ) );
-  vkUnmapMemory( app->device, app->vertex_memory );
+  app->mapped_coherant_memory = map_memory( app->device, sizeof( triangle ), app->vertex_memory );
+  memcpy( app->mapped_coherant_memory, triangle, sizeof( triangle ) );
 
   app->framebuffers = malloc( app->n_swapchain_images * sizeof( *app->framebuffers) );
   if( UNLIKELY( !app->framebuffers ) ) {
@@ -1050,6 +1046,7 @@ app_destroy( app_t* app )
   vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
   vkDestroySurfaceKHR( app->instance, app->window_surface, NULL );
 
+  vkUnmapMemory( app->device, app->vertex_memory );
   vkDestroyBuffer( app->device, app->vertex_buffer, NULL );
   vkFreeMemory( app->device, app->vertex_memory, NULL );
 
@@ -1084,12 +1081,15 @@ mouse_button_callback( GLFWwindow* window,
   if( button != GLFW_MOUSE_BUTTON_LEFT ) return;
   if( action != GLFW_PRESS )             return;
 
-  // app_t* app = glfwGetWindowUserPointer( app );
+  app_t* app = glfwGetWindowUserPointer( window );
 
   double x, y;
   glfwGetCursorPos( window, &x, &y );
 
   LOG_INFO( "button pressed at (%f,%f)", x, y );
+  triangle[0].pos[0] = (float)(x/(double)WIDTH);
+  triangle[0].pos[1] = (float)(y/(double)HEIGHT);
+  memcpy( app->mapped_coherant_memory, triangle, sizeof( triangle ) );
 }
 
 void

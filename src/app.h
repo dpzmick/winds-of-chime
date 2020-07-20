@@ -1,7 +1,7 @@
 #pragma once
 
 #include "volk.h"
-#define WOC_USE_MAILBOX
+//#define WOC_USE_MAILBOX
 
 // forward decl
 typedef struct GLFWwindow GLFWwindow;
@@ -31,6 +31,7 @@ struct app
 
   VkBuffer           vertex_buffer;
   VkDeviceMemory     vertex_memory;
+  void*              mapped_coherant_memory;
 
   VkPipelineLayout   pipeline_layout;
   VkRenderPass       render_pass;

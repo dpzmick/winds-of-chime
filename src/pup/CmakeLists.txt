@@ -1,0 +1,25 @@
+# attempt to compile ocaml with cmake
+# might be tricky
+
+# define the pup core library
+# then use the core to build generators all over the place
+
+add_custom_target(pups ALL)
+
+function(create_ocaml_library source_files)
+endfunction()
+
+set(core_library_in ${CMAKE_CURRENT_SOURCE_DIR}/${shader_src})
+set(out ${CMAKE_CURRENT_BINARY_DIR}/${shader_dst})
+add_custom_command(
+  OUTPUT  ${shader_dst}
+  DEPENDS ${in}
+  COMMAND glslc -fshader-stage=${stage} ${in} -o ${out})
+add_custom_target(shader-${name} DEPENDS ${out})
+add_dependencies(shader shader-${name})
+
+function(add_pup_generator source_files)
+endfunction()
+
+function(pup_generate generator_name )
+endfunction()

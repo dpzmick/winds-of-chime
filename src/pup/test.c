@@ -1,19 +1,10 @@
 #include "foo.h"
+#include "tracer.h"
 
 #include <stdio.h>
 #include <stdbool.h>
 
 #define ARRAY_SIZE( arr ) ( sizeof( arr )/sizeof( *arr ) )
-
-typedef struct {
-  bool idk;
-} tracer_t;
-
-tracer_t *
-tracer_new( void );
-
-void
-tracer_write( tracer_t * tracer, int id, void const * message, size_t sz );
 
 int main() {
   int8_t arr[]  = { 1, 2, 3 };
