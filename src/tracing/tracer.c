@@ -2,7 +2,7 @@
 
 #include <stdio.h>
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   int    tag;
   size_t size;
 } message_hdr_t;

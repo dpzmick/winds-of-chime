@@ -24,7 +24,7 @@ let rec comp_time_eval expr =
   | Mul (a, b) ->
      (comp_time_eval a) * (comp_time_eval b)
   | Member _  ->
-     raise (Invalid_argument "expr cannot be evaulated at compile time")
+     raise (Invalid_argument "expr cannot be evaluated at compile time")
 
 let rec type_size pt =
   match pt with

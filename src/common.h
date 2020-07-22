@@ -31,7 +31,7 @@ static inline uint64_t
 wallclock( void )
 {
   struct timespec t[1];
-  int ret = clock_gettime( CLOCK_REALTIME, t );
+  int ret = clock_gettime( CLOCK_REALTIME, t ); // FIXME use monotonic?
   if( ret != 0 ) return (uint64_t)-1;
   return (uint64_t)t->tv_sec*100000000ul + (uint64_t)t->tv_nsec;
 }

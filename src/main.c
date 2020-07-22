@@ -4,6 +4,8 @@
 
 #include "volk.h"
 
+#include <tracing_structs.h>
+
 #include <GLFW/glfw3.h>
 #include <assert.h>
 #include <dlfcn.h>

@@ -1,16 +1,4 @@
-open PupTypes
-
-let foo = Pup.structure [
-    ("type",   U8);
-    ("arr_sz", U32); (* must come before the dynamic array *)
-    ("arr",    Pup.runtime_array I8 "arr_sz" 10);
-    ("buf",    Pup.fixed_array I8 10);
-  ]
-
-let frame_timer = Pup.structure [
-    ("start", U64);
-    ("end",   U64);
-  ]
+open PupCore
 
 (* Generate a C generic macro for easy logging into a tracer *)
 
@@ -24,9 +12,9 @@ let c_generate_tracer_helper doc =
   Printf.sprintf "#define tracer_write_pup( tracer, message ) _Generic( (message),\\\n%s )\n"
     (String.concat ", \\\n" (PupC.c_map_ids variant doc))
 
-let doc = Pup.document [("foo", foo);
-                        ("frame_timer", frame_timer);]
-
 let () =
-  PupC.create_with_extra doc (c_generate_tracer_helper doc)
+  PupC.create_with_extra TracingStructs.doc (c_generate_tracer_helper TracingStructs.doc)
   |> print_string
+
+
+(* FIXME use the size function instead of sizeof() for write to tracer *)

@@ -1,6 +1,8 @@
 #include "app.h"
 #include "common.h"
 #include "util/log.h"
+#include "tracing/tracer.h"
+#include "tracing_structs.h"
 
 #include "volk.h"
 
@@ -829,8 +831,8 @@ app_init( app_t*     app,
                                      &app->image_views,
                                      app->swapchain_extent );
 
-  app->vert = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/vert.spv", app->device );
-  app->frag = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/frag.spv", app->device );
+  app->vert = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/shaders/vert.spv", app->device );
+  app->frag = create_shader( "/home/dpzmick/programming/winds-of-chime/build/src/shaders/frag.spv", app->device );
 
   app->pipeline_layout   = create_pipeline_layout( app->device );
   app->render_pass       = create_render_pass( app->device, app->swapchain_surface_format );
@@ -1015,6 +1017,8 @@ app_init( app_t*     app,
     app->images_in_flight[i] = VK_NULL_HANDLE;
   }
 
+  app->tracer = new_tracer( "outfile" );
+
   // we did it
 }
 
@@ -1068,8 +1072,9 @@ app_destroy( app_t* app )
 
   vkDestroyDevice( app->device, NULL );
 
-  // close the window first
   glfwDestroyWindow( app->window );
+
+  delete_tracer( app->tracer );
 }
 
 static void
@@ -1111,8 +1116,13 @@ app_run( app_t* app )
 
   glfwSetMouseButtonCallback( window, mouse_button_callback );
 
+  next_image_t trace_image[1];
+  ticktock_t   ticktock[1];
+
   uint64_t current_frame = 0;
   while( !glfwWindowShouldClose( window ) ) {
+    uint64_t start = wallclock();
+
     glfwPollEvents();
 
     uint32_t             image_index     = 0;
@@ -1133,6 +1143,9 @@ app_run( app_t* app )
     if( UNLIKELY( res != VK_SUCCESS ) ) {
       FATAL( "Failed to acquire image, err=%d", res );
     }
+
+    next_image_reset( trace_image, image_index );
+    tracer_write_pup( app->tracer, trace_image );
 
     // make sure the last render of this frame is finished
     res = vkWaitForFences( device, 1, &fence, VK_TRUE, UINT64_MAX );
@@ -1199,6 +1212,10 @@ app_run( app_t* app )
 
     current_frame += 1;
     if( current_frame >= max_frames_in_flight ) current_frame = 0; /* cmov */
+
+    uint64_t end = wallclock();
+    ticktock_reset( ticktock, start, end, strlen( "frame" ), (int8_t const*)"frame" );
+    tracer_write_pup( app->tracer, ticktock );
   }
 
   // wait for all outstanding requests to finish

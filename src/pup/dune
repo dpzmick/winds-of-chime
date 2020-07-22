@@ -1,0 +1,14 @@
+(library
+ (name TracingStructs)
+ (modules TracingStructs)
+ (libraries PupCore))
+
+(executable
+ (name genCTracingStructs)
+ (libraries PupCore TracingStructs)
+ (modules GenCTracingStructs))
+
+(executable
+ (name genPyTracingStructs)
+ (libraries PupCore TracingStructs)
+ (modules GenPyTracingStructs))

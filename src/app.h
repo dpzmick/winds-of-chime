@@ -5,6 +5,7 @@
 
 // forward decl
 typedef struct GLFWwindow GLFWwindow;
+typedef struct tracer     tracer_t;
 
 typedef struct app app_t;
 
@@ -47,6 +48,8 @@ struct app
   VkSemaphore*       render_finished_semaphores;
   VkFence*           in_flight_fences;
   VkFence*           images_in_flight;
+
+  tracer_t*          tracer;
 };
 
 void

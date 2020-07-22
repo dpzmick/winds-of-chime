@@ -34,8 +34,8 @@ let rec c_simple_expr expr =
   match expr with
   | Member field_name -> Printf.sprintf "(uint64_t)%s" field_name
   | Constant v -> Printf.sprintf "%dul" v
-  | Add (a, b) -> Printf.sprintf "%s + %s" (c_simple_expr a) (c_simple_expr b)
-  | Mul (a, b) -> Printf.sprintf "%s * %s" (c_simple_expr a) (c_simple_expr b)
+  | Add (a, b) -> Printf.sprintf "(%s) + (%s)" (c_simple_expr a) (c_simple_expr b)
+  | Mul (a, b) -> Printf.sprintf "(%s) * (%s)" (c_simple_expr a) (c_simple_expr b)
 
 let c_make_struct_typename = Printf.sprintf "%s_t"
 let c_make_struct_varname x = x (* identity for now *)
@@ -169,14 +169,42 @@ let c_getter offsets struct_name member_name member_type =
     signature
     (String.concat "\n" body)
 
-let c_make_getter _s _offsets struct_name member_name member_type =
-  c_getter_sig struct_name member_name member_type
+let c_make_size_fn s struct_name =
+  let varname = (c_make_struct_varname struct_name) in
+  let arguments = [(c_make_const_struct_ptr_arg struct_name)] in
+  let exprs = map_values s (fun _ ty -> type_size ty) in
+  let expr = List.fold_left
+      (fun acc el -> Add (acc, el))
+      (Constant 0)
+      exprs
+  in
+  let deps = dependent_members expr in
+  let load_expr member_name =
+      Printf.sprintf "uint64_t %s = (uint64_t)%s_get_%s( %s );"
+        member_name
+        struct_name
+        member_name
+        varname
+  in
+  let loaders = List.map load_expr deps in
+  let body = loaders@[
+      "return " ^ (c_simple_expr expr) ^ ";";
+    ]
+  in
+  Printf.sprintf
+    "%s {\n%s\n}\n"
+    (c_make_signature
+       "uint64_t"
+       (Printf.sprintf "%s_size" struct_name)
+       arguments)
+    (String.concat "\n" (List.map (Printf.sprintf "  %s") body))
 
 let c_make_methods s struct_name =
   let offsets = structure_offsets s in
   let reset = c_make_reset s offsets struct_name in
   let getters = map_values s (fun name typ -> c_getter offsets struct_name name typ) in
-  String.concat "\n" (reset::getters)
+  let sz = c_make_size_fn s struct_name in
+  String.concat "\n" ([reset]@getters@[sz])
 
 (* for users to generate their own additions, they will need to know all of the
    names we've generated. For now, we provide IDs and types *)
@@ -226,3 +254,5 @@ let create (doc : pup_document) = create_with_extra doc ""
 
 (* No setters allowed! Changing the size of a runtime sized array would change
    the layout and require moving all downstream fields. Feels like a pain. *)
+
+(* loader api is just casting something to a struct and reading fields *)
