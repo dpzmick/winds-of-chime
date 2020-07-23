@@ -151,10 +151,15 @@ let c_getter offsets struct_name member_name member_type =
   let loaders = List.map load_expr deps in
   (* create return value *)
   let exprs = match member_type with
-    | Array _ ->
+    | Array (_, (FixedSize sz)) ->
       (* load into outparams, return nothing *)
       [(c_make_copy member_type src_c_expr "out_array");
-       (Printf.sprintf "*out_array_size = %s;" (c_simple_expr offset_expr));
+       (Printf.sprintf "*out_array_size = %s;" (c_simple_expr sz));
+      ]
+    | Array (_, (RuntimeSize (sz, _))) ->
+      (* load into outparams, return nothing *)
+      [(c_make_copy member_type src_c_expr "out_array");
+       (Printf.sprintf "*out_array_size = %s;" (c_simple_expr sz));
       ]
     | _ ->
       (* load into temp value, return temp value *)

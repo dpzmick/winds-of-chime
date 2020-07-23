@@ -8,5 +8,13 @@ let ticktock = structure [("start",  U64);
 
 let next_image = structure [("next_image_idx", U32);]
 
+let test = structure [("a_sz", U64);
+                      ("cnt", U64);
+                      ("arr", Array
+                         (Array (U64,
+                                 (RuntimeSize (Member "a_sz", Constant 10))),
+                          (RuntimeSize (Member "cnt", Constant 10))));]
+
 let doc = document [("ticktock", ticktock);
                     ("next_image", next_image);]
+                    (* ("test", test)] *)

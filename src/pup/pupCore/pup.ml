@@ -16,6 +16,29 @@ let structure members = members
 
 let map_values s f = List.map (fun (n, t) -> f n t) s
 
+let rec print_expr expr =
+  match expr with
+  | Member m -> m
+  | Constant c -> string_of_int c
+  | Add (a, b) -> "(" ^ (print_expr a) ^ ") + (" ^ (print_expr b) ^ ")"
+  | Mul (a, b) -> "(" ^ (print_expr a) ^ ") * (" ^ (print_expr b) ^ ")"
+
+(* let rec print_type pt =
+ *   match pt with
+ *   | I8 -> "I8"
+ *   | U8 -> "U8"
+ *   | I32 -> "I8"
+ *   | U32 -> "I32"
+ *   | I64 -> "I8"
+ *   | U64 -> "I64"
+ *   | Array (pt, (RuntimeSize (a, b))) -> Printf.sprintf "Array (%s) (RuntimeSize %s,%s)"
+ *                                           (print_type pt)
+ *                                           (print_expr a)
+ *                                           (print_expr b)
+ *   | Array (pt, (FixedSize a)) -> Printf.sprintf "Array (%s) (FixedSize %s)"
+ *                                    (print_type pt)
+ *                                    (print_expr a) *)
+
 let rec comp_time_eval expr =
   match expr with
   | Constant c -> c
@@ -24,7 +47,7 @@ let rec comp_time_eval expr =
   | Mul (a, b) ->
      (comp_time_eval a) * (comp_time_eval b)
   | Member _  ->
-     raise (Invalid_argument "expr cannot be evaluated at compile time")
+     raise (Invalid_argument ("expr " ^ (print_expr expr) ^ " cannot be evaluated at compile time"))
 
 let rec type_size pt =
   match pt with
@@ -36,12 +59,15 @@ let rec type_size pt =
   | Array (pt, (RuntimeSize (expr, _))) ->
      Mul (type_size pt, expr)
 
-let type_max_size pt =
-  (match pt with
-   | Array (pt, (RuntimeSize (_, expr))) ->
-      Mul (type_size pt, expr)
-   | _ -> type_size pt)
-  |> comp_time_eval
+let rec type_max_size pt =
+  match pt with
+  | Array (pt, (FixedSize expr)) ->
+    (type_max_size pt) * (comp_time_eval expr)
+
+  | Array (pt, (RuntimeSize (_, expr))) ->
+    (type_max_size pt * (comp_time_eval expr))
+
+  | _ -> comp_time_eval (type_size pt)
 
 let structure_offsets s =
   let rec f (acc : (string * expr) list) last_expr rest =
