@@ -31,6 +31,33 @@ static vertex_t triangle[] = {
   { .pos = { -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
 };
 
+static inline void
+trace_frame_end( tracer_t * tracer, uint64_t start )
+{
+  static int8_t id[] = "frame";
+  ticktock_t ticktock[1];
+  ticktock_reset( ticktock, start, wallclock(), ARRAY_SIZE( id ), id  );
+  tracer_write_pup( tracer, ticktock );
+}
+
+static inline void
+trace_wait( tracer_t * tracer, uint64_t start )
+{
+  static int8_t id[] = "wait";
+  ticktock_t ticktock[1];
+  ticktock_reset( ticktock, start, wallclock(), ARRAY_SIZE( id ), id  );
+  tracer_write_pup( tracer, ticktock );
+}
+
+static inline void
+trace_click( tracer_t * tracer, uint64_t start )
+{
+  static int8_t id[] = "click";
+  ticktock_t ticktock[1];
+  ticktock_reset( ticktock, start, wallclock(), ARRAY_SIZE( id ), id  );
+  tracer_write_pup( tracer, ticktock );
+}
+
 static char*
 read_entire_file( char const* filename,
                   size_t*     out_bytes )
@@ -130,7 +157,8 @@ static VkPhysicalDevice
 select_physical_device( VkInstance   instance,
                         VkSurfaceKHR window_surface,
                         uint32_t *   out_queue_idx,
-                        uint32_t *   out_memory_idx )
+                        uint32_t *   out_device_memory_idx,
+                        uint32_t *   out_local_memory_idx )
 {
   VkResult                 res;
   VkQueueFamilyProperties* props    = NULL;
@@ -139,7 +167,8 @@ select_physical_device( VkInstance   instance,
   // outparams
   VkPhysicalDevice device         = VK_NULL_HANDLE;
   uint32_t         graphics_queue = (uint32_t)-1;
-  uint32_t         memory_idx     = (uint32_t)-1;
+  uint32_t         device_mem_idx = (uint32_t)-1;
+  uint32_t         local_mem_idx  = (uint32_t)-1;
 
   uint32_t           device_count;
   VkPhysicalDevice * devices = get_physical_devices( instance, &device_count );
@@ -156,8 +185,9 @@ select_physical_device( VkInstance   instance,
 
     // need queues for graphics, present, and transfer
     // for now, assuming that a queue with GRAPHICS_BIT implies all of the above
-    bool     found_queue = false;
-    bool     found_mem   = false;
+    bool found_queue      = false;
+    bool found_device_mem = false;
+    bool found_local_mem  = false;
 
     for( uint32_t j = 0; j < prop_cnt; ++j ) {
       VkQueueFlags flags = props[i].queueFlags;
@@ -179,14 +209,22 @@ select_physical_device( VkInstance   instance,
     uint32_t            n_mem = mem_props->memoryTypeCount;
     VkMemoryType const* mt    = mem_props->memoryTypes;
     for( uint32_t j = 0; j < n_mem; ++j ) {
-      if( mt[j].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ) {
-        memory_idx = j;
-        found_mem = true;
+      if( !found_device_mem && mt[j].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ) {
+        device_mem_idx = j;
+        found_device_mem = true;
+      }
+
+      bool good_local_mem = mt[j].propertyFlags & ( VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                                                    | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT );
+
+      if( !found_local_mem && good_local_mem ) {
+        local_mem_idx = j;
+        found_local_mem = true;
         break;
       }
     }
 
-    if( found_queue && found_mem ) {
+    if( found_queue && found_device_mem && found_local_mem ) {
       device = dev;
       break;
     }
@@ -199,8 +237,9 @@ select_physical_device( VkInstance   instance,
     FATAL( "No acceptable device found" );
   }
 
-  *out_queue_idx  = graphics_queue;
-  *out_memory_idx = memory_idx;
+  *out_queue_idx         = graphics_queue;
+  *out_device_memory_idx = device_mem_idx;
+  *out_local_memory_idx  = local_mem_idx;
   return device;
 }
 
@@ -465,14 +504,16 @@ create_swapchain( VkPhysicalDevice     phy,
 
 static VkBuffer
 create_vertex_buffer( VkDevice device,
-                      uint32_t size )
+                      uint32_t size,
+                      bool     local )
 {
   VkBufferCreateInfo buffer_ci[] = {{
     .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
     .pNext                 = NULL,
     .flags                 = 0,
     .size                  = size,
-    .usage                 = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    .usage                 = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+                             | ( local ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : VK_BUFFER_USAGE_TRANSFER_DST_BIT ),
     .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
     .queueFamilyIndexCount = 0,
     .pQueueFamilyIndices   = NULL, // not needed when not sharing mode CONCURRENT
@@ -814,13 +855,16 @@ app_init( app_t*     app,
   glfwSetWindowUserPointer( app->window, app );
 
   uint32_t queue_idx;
-  uint32_t memory_idx;
+  uint32_t device_memory_idx;
+  uint32_t local_memory_idx;
   VkPhysicalDevice physical_device = select_physical_device( instance,
                                                              app->window_surface,
                                                              &queue_idx,
-                                                             &memory_idx );
+                                                             &device_memory_idx,
+                                                             &local_memory_idx );
 
-  LOG_INFO( "Graphics queue at idx %u", queue_idx );
+  LOG_INFO( "Graphics queue at idx %u. Local memory at %u, remote memory at %u",
+            queue_idx, local_memory_idx, device_memory_idx );
 
   open_device( app, physical_device, queue_idx );
   app->swapchain = create_swapchain( physical_device, app->device, app->window_surface,
@@ -841,22 +885,33 @@ app_init( app_t*     app,
                                             app->swapchain_extent );
 
   // -- allocate vertex buffer
-  app->vertex_buffer = create_vertex_buffer( app->device, sizeof( triangle ) );
+  app->remote_vertex_buffer = create_vertex_buffer( app->device, sizeof( triangle ), false );
+  app->local_vertex_buffer  = create_vertex_buffer( app->device, sizeof( triangle ), true );
 
   // device might have minimum memory size
   VkMemoryRequirements mem_req[1];
-  vkGetBufferMemoryRequirements( app->device, app->vertex_buffer, mem_req );
+  vkGetBufferMemoryRequirements( app->device, app->remote_vertex_buffer, mem_req );
 
-  app->vertex_memory = allocate_vertex_buffer( app->device, MAX( (VkDeviceSize)sizeof( triangle ), mem_req->size ), memory_idx );
+  VkDeviceSize sz = MAX( (VkDeviceSize)sizeof( triangle ), mem_req->size );
+  app->remote_vertex_memory = allocate_vertex_buffer( app->device, sz, device_memory_idx );
+
+  vkGetBufferMemoryRequirements( app->device, app->local_vertex_buffer, mem_req );
+  sz = MAX( (VkDeviceSize)sizeof( triangle ), mem_req->size );
+  app->local_vertex_memory = allocate_vertex_buffer( app->device, sz, local_memory_idx );
 
   // bind the allocated memory at offset 0
-  res = vkBindBufferMemory( app->device, app->vertex_buffer, app->vertex_memory, 0 );
+  res = vkBindBufferMemory( app->device, app->remote_vertex_buffer, app->remote_vertex_memory, 0 );
   if( UNLIKELY( res != VK_SUCCESS ) ) {
     FATAL( "Failed to bind memory, err=%d", res );
   }
 
-  app->mapped_coherant_memory = map_memory( app->device, sizeof( triangle ), app->vertex_memory );
-  memcpy( app->mapped_coherant_memory, triangle, sizeof( triangle ) );
+  res = vkBindBufferMemory( app->device, app->local_vertex_buffer, app->local_vertex_memory, 0 );
+  if( UNLIKELY( res != VK_SUCCESS ) ) {
+    FATAL( "Failed to bind memory, err=%d", res );
+  }
+
+  app->mapped_vertex_memory = map_memory( app->device, sizeof( triangle ), app->local_vertex_memory );
+  memcpy( app->mapped_vertex_memory, triangle, sizeof( triangle ) );
 
   app->framebuffers = malloc( app->n_swapchain_images * sizeof( *app->framebuffers) );
   if( UNLIKELY( !app->framebuffers ) ) {
@@ -907,7 +962,7 @@ app_init( app_t*     app,
     .pNext              = NULL,
     .commandPool        = app->command_pool,
     .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-    .commandBufferCount = app->n_swapchain_images, // one draw command for each swapchain image
+    .commandBufferCount = app->n_swapchain_images,
   }};
 
   res = vkAllocateCommandBuffers( app->device, cb_ci, app->command_buffers );
@@ -930,6 +985,12 @@ app_init( app_t*     app,
       FATAL( "Failed to begin command buffer, err=%d", res );
     }
 
+    VkBufferCopy bc[] = {{
+      .srcOffset = 0,
+      .dstOffset = 0,
+      .size      = (VkDeviceSize)sizeof( triangle ),
+    }};
+
     // nasty
     VkClearValue clear[] = {{
       .color = {
@@ -947,9 +1008,12 @@ app_init( app_t*     app,
       .pClearValues    = clear,
     }};
 
+    vkCmdCopyBuffer( buffer, app->local_vertex_buffer, app->remote_vertex_buffer, 1, bc );
+    vkCmdPipelineBarrier( buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT,
+                          0, NULL, 0, NULL, 0, NULL );
     vkCmdBeginRenderPass( buffer, render_pass_info, VK_SUBPASS_CONTENTS_INLINE );
     vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->graphics_pipeline );
-    vkCmdBindVertexBuffers( buffer, 0, 1, &app->vertex_buffer, &(VkDeviceSize){0} );
+    vkCmdBindVertexBuffers( buffer, 0, 1, &app->remote_vertex_buffer, &(VkDeviceSize){0} );
     vkCmdDraw( buffer, ARRAY_SIZE( triangle ), 1, 0, 0 );
     vkCmdEndRenderPass( buffer );
 
@@ -1050,9 +1114,12 @@ app_destroy( app_t* app )
   vkDestroySwapchainKHR( app->device, app->swapchain, NULL );
   vkDestroySurfaceKHR( app->instance, app->window_surface, NULL );
 
-  vkUnmapMemory( app->device, app->vertex_memory );
-  vkDestroyBuffer( app->device, app->vertex_buffer, NULL );
-  vkFreeMemory( app->device, app->vertex_memory, NULL );
+  vkUnmapMemory( app->device, app->local_vertex_memory );
+  vkDestroyBuffer( app->device, app->local_vertex_buffer, NULL );
+  vkFreeMemory( app->device, app->local_vertex_memory, NULL );
+
+  vkDestroyBuffer( app->device, app->remote_vertex_buffer, NULL );
+  vkFreeMemory( app->device, app->remote_vertex_memory, NULL );
 
   vkDestroyShaderModule( app->device, app->vert, NULL );
   vkDestroyShaderModule( app->device, app->frag, NULL );
@@ -1086,15 +1153,25 @@ mouse_button_callback( GLFWwindow* window,
   if( button != GLFW_MOUSE_BUTTON_LEFT ) return;
   if( action != GLFW_PRESS )             return;
 
+  uint64_t start = wallclock();
+
   app_t* app = glfwGetWindowUserPointer( window );
 
   double x, y;
   glfwGetCursorPos( window, &x, &y );
 
-  LOG_INFO( "button pressed at (%f,%f)", x, y );
-  triangle[0].pos[0] = (float)(x/(double)WIDTH);
-  triangle[0].pos[1] = (float)(y/(double)HEIGHT);
-  memcpy( app->mapped_coherant_memory, triangle, sizeof( triangle ) );
+  // change local triangle on every frame, we're always resending
+
+  double vk_x = (x-WIDTH/2) / (double)WIDTH;
+  double vk_y = (y-WIDTH/2) / (double)HEIGHT;
+
+  triangle[0].pos[0] = (float)vk_x;
+  triangle[0].pos[1] = (float)vk_y;
+
+  // FIXME skip the copy? just write straight to mapped memory?
+  memcpy( app->mapped_vertex_memory, triangle, sizeof( triangle ) );
+
+  trace_click( app->tracer, start );
 }
 
 void
@@ -1116,10 +1193,9 @@ app_run( app_t* app )
 
   glfwSetMouseButtonCallback( window, mouse_button_callback );
 
+  uint64_t     current_frame = 0;
   next_image_t trace_image[1];
-  ticktock_t   ticktock[1];
 
-  uint64_t current_frame = 0;
   while( !glfwWindowShouldClose( window ) ) {
     uint64_t start = wallclock();
 
@@ -1146,6 +1222,7 @@ app_run( app_t* app )
 
     next_image_reset( trace_image, image_index );
     tracer_write_pup( app->tracer, trace_image );
+    trace_wait( app->tracer, start );
 
     // make sure the last render of this frame is finished
     res = vkWaitForFences( device, 1, &fence, VK_TRUE, UINT64_MAX );
@@ -1213,9 +1290,7 @@ app_run( app_t* app )
     current_frame += 1;
     if( current_frame >= max_frames_in_flight ) current_frame = 0; /* cmov */
 
-    uint64_t end = wallclock();
-    ticktock_reset( ticktock, start, end, strlen( "frame" ), (int8_t const*)"frame" );
-    tracer_write_pup( app->tracer, ticktock );
+    trace_frame_end( app->tracer, start );
   }
 
   // wait for all outstanding requests to finish

@@ -37,7 +37,7 @@ let py_load offsets name typ =
   let offset_expr = List.assoc name offsets in
   match typ with
   | Array (pt, (FixedSize size_expr)) ->
-     Printf.sprintf "    %s = []\n    for i in range(0, %s):\n      tmp = struct.struct('=%s', b[(%s):(%s)])\n      %s.append(tmp)"
+     Printf.sprintf "    %s = []\n    for i in range(0, %s):\n      (tmp,) = struct.struct('=%s', b[(%s):(%s)])\n      %s.append(tmp)"
        name
        (py_key pt)
        (py_expr offset_expr)
@@ -47,7 +47,7 @@ let py_load offsets name typ =
   | Array (pt, (RuntimeSize (array_size_expr, _))) ->
      let size_expr = type_size pt in
      let array_offset_expr = (Add (offset_expr, (Mul (size_expr, Member "i")))) in
-     Printf.sprintf "    %s = []\n    for i in range(0, %s):\n      tmp = struct.unpack('=%s', b[(%s):(%s)])\n      %s.append(tmp)"
+     Printf.sprintf "    %s = []\n    for i in range(0, %s):\n      (tmp,) = struct.unpack('=%s', b[(%s):(%s)])\n      %s.append(tmp)"
        name
        (py_expr array_size_expr)
        (py_key pt)
