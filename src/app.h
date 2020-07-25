@@ -1,7 +1,7 @@
 #pragma once
 
 #include "volk.h"
-// #define WOC_USE_MAILBOX
+#define WOC_USE_MAILBOX
 
 // forward decl
 typedef struct GLFWwindow GLFWwindow;

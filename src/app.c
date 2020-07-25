@@ -1228,8 +1228,11 @@ mouse_button_callback( GLFWwindow* window,
 
   // change local triangle on every frame, we're always resending
 
-  double vk_x = (x-WIDTH/2) / (double)WIDTH;
-  double vk_y = (y-WIDTH/2) / (double)HEIGHT;
+  double vk_x = (x-WIDTH/2) / (double)(WIDTH/2);
+  double vk_y = (y-HEIGHT/2) / (double)(HEIGHT/2);
+
+  // uh oh, I'm getting highish latencies here when I use fifo
+  // FIXME figure out how to measure that???
 
   triangle[0].pos[0] = (float)vk_x;
   triangle[0].pos[1] = (float)vk_y;
