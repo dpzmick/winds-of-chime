@@ -33,6 +33,8 @@ tracer_write( tracer_t * tracer, int id, void const * message, size_t sz )
   hdr->tag  = id;
   hdr->size = sz;
 
+  //printf("id: %d sz: %zu\n", id, sz);
+
   fwrite( hdr, sizeof( hdr ), 1, tracer->fp );
   fwrite( message, sz, 1, tracer->fp );
 }

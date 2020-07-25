@@ -70,6 +70,7 @@ create_instance( VkDebugUtilsMessengerEXT* out_messenger )
 
   bool     do_validation    = false;
   uint32_t validation_count = 0;
+#ifdef DO_VALIDATION
   vk_res = vkEnumerateInstanceExtensionProperties( validation_layer, &validation_count, NULL );
   if( vk_res == VK_SUCCESS ) {
     VkExtensionProperties* props = malloc( sizeof( *props )*validation_count );
@@ -96,6 +97,7 @@ create_instance( VkDebugUtilsMessengerEXT* out_messenger )
               " Disabling debug layers",
               validation_layer );
   }
+#endif
 
   VkInstanceCreateInfo instance_create_info[1] = {{
     .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,

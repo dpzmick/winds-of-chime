@@ -46,6 +46,10 @@ struct app
   VkCommandPool      command_pool;
   VkCommandBuffer*   command_buffers;
 
+  uint32_t           queue_timestamp_bits;   // from queue family props
+  float              queue_timestamp_period; // from physical device
+  VkQueryPool*       query_pools;
+
   uint32_t           max_frames_in_flight;
   VkSemaphore*       image_avail_semaphores;
   VkSemaphore*       render_finished_semaphores;

@@ -58,7 +58,7 @@ let c_make_signature c_return_type fname args =
     (String.concat ", " (List.map print args))
 
 (* dst is always pointer, src is always "value" *)
-let c_make_copy typ src_value dst_ptr =
+let c_make_copy_value typ src_value dst_ptr =
   match typ with
   | Array _ ->
     Printf.sprintf "memcpy( %s, %s, %s );"
@@ -71,6 +71,12 @@ let c_make_copy typ src_value dst_ptr =
       dst_ptr
       src_value
       (c_simple_expr (type_size typ))
+
+let c_make_copy_mem typ src_ptr dst_ptr =
+  Printf.sprintf "memcpy( %s, %s, (%s) );"
+    dst_ptr
+    src_ptr
+    (c_simple_expr (type_size typ))
 
 let c_struct_defn s struct_name =
   Printf.sprintf
@@ -91,7 +97,7 @@ let c_make_reset s offsets struct_name =
       (c_get_buffer (c_make_struct_varname struct_name))
       (c_simple_expr (List.assoc name offsets))
   in
-  let storef name typ = c_make_copy typ name (target name) in
+  let storef name typ = c_make_copy_value typ name (target name) in
   let stores : string list = map_values s storef in
 
   Printf.sprintf
@@ -153,18 +159,18 @@ let c_getter offsets struct_name member_name member_type =
   let exprs = match member_type with
     | Array (_, (FixedSize sz)) ->
       (* load into outparams, return nothing *)
-      [(c_make_copy member_type src_c_expr "out_array");
+      [(c_make_copy_value member_type src_c_expr "out_array");
        (Printf.sprintf "*out_array_size = %s;" (c_simple_expr sz));
       ]
     | Array (_, (RuntimeSize (sz, _))) ->
       (* load into outparams, return nothing *)
-      [(c_make_copy member_type src_c_expr "out_array");
+      [(c_make_copy_value member_type src_c_expr "out_array");
        (Printf.sprintf "*out_array_size = %s;" (c_simple_expr sz));
       ]
     | _ ->
       (* load into temp value, return temp value *)
       [(Printf.sprintf "%s ret;" (c_signature member_type));
-       (c_make_copy member_type src_c_expr "&ret");
+       (c_make_copy_mem member_type src_c_expr "&ret");
        "return ret;";
       ]
   in

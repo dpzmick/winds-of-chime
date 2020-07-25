@@ -16,6 +16,7 @@ type array_qualifier =
 type pup_type =
   | I8
   | U8
+  (* FIXME 16 bit *)
   | I32
   | U32
   | I64

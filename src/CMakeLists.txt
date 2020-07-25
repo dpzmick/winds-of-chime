@@ -9,9 +9,11 @@ set(PUP_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/pup/_build/)
 set(C_EXE ${PUP_BUILD_DIR}/default/genCTracingStructs.exe)
 set(PY_EXE ${PUP_BUILD_DIR}/default/genPyTracingStructs.exe)
 
+file(MAKE_DIRECTORY ${PUP_BUILD_DIR}) # technically incorrect
+
 include(ExternalProject)
 ExternalProject_Add(pup
-  SOURCE_DIR pup
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/pup
   BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/pup
   BUILD_COMMAND dune build --build-dir=${PUP_BUILD_DIR}
   CONFIGURE_COMMAND ""

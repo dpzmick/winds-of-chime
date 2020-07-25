@@ -41,21 +41,39 @@ trace_frame_end( tracer_t * tracer, uint64_t start )
 }
 
 static inline void
-trace_wait( tracer_t * tracer, uint64_t start )
+trace_query_pool( tracer_t * tracer,
+                  VkDevice device,
+                  VkQueryPool qp,
+                  float period,
+                  uint32_t bit_mask )
 {
-  static int8_t id[] = "wait";
-  ticktock_t ticktock[1];
-  ticktock_reset( ticktock, start, wallclock(), ARRAY_SIZE( id ), id  );
-  tracer_write_pup( tracer, ticktock );
-}
+  static int8_t transfer_id[] = "transfer";
+  static int8_t render_id[]   = "render";
+  static int8_t e2e_id[]      = "e2e";
 
-static inline void
-trace_click( tracer_t * tracer, uint64_t start )
-{
-  static int8_t id[] = "click";
-  ticktock_t ticktock[1];
-  ticktock_reset( ticktock, start, wallclock(), ARRAY_SIZE( id ), id  );
-  tracer_write_pup( tracer, ticktock );
+  uint32_t results[3] = {0};
+  VkResult res = vkGetQueryPoolResults( device, qp, 0, 3,
+                                        sizeof( uint32_t )*3, results,
+                                        sizeof( uint32_t ), VK_QUERY_RESULT_WAIT_BIT );
+
+  uint64_t ns[3];
+  for( uint32_t i = 0; i < 3; ++i ) {
+    // results[i] = (uint32_t)((float)(results[i] & bit_mask) * period);
+    ns[i] = (uint64_t)((double)results[i] * (double)period);
+  }
+
+
+  vk_trace_t trace[1];
+  vk_trace_reset( trace, ARRAY_SIZE( transfer_id ), transfer_id, ns[1]-ns[0] );
+  tracer_write_pup( tracer, trace );
+
+  vk_trace_reset( trace, ARRAY_SIZE( render_id ), render_id, ns[2]-ns[1] );
+  tracer_write_pup( tracer, trace );
+
+  vk_trace_reset( trace, ARRAY_SIZE( e2e_id ), e2e_id, ns[2]-ns[0] );
+  tracer_write_pup( tracer, trace );
+
+  // LOG_INFO( "%zu %zu %zu", ns[0], ns[1], ns[2] );
 }
 
 static char*
@@ -158,7 +176,9 @@ select_physical_device( VkInstance   instance,
                         VkSurfaceKHR window_surface,
                         uint32_t *   out_queue_idx,
                         uint32_t *   out_device_memory_idx,
-                        uint32_t *   out_local_memory_idx )
+                        uint32_t *   out_local_memory_idx,
+                        uint32_t *   out_queue_timestamp_bits,
+                        float    *   out_timestamp_period )
 {
   VkResult                 res;
   VkQueueFamilyProperties* props    = NULL;
@@ -170,11 +190,18 @@ select_physical_device( VkInstance   instance,
   uint32_t         device_mem_idx = (uint32_t)-1;
   uint32_t         local_mem_idx  = (uint32_t)-1;
 
+  uint32_t         queue_ts_bits  = (uint32_t)-1;
+  float            ts_period      = 0;
+
   uint32_t           device_count;
   VkPhysicalDevice * devices = get_physical_devices( instance, &device_count );
 
   for( uint32_t i = 0; i < device_count; ++i ) {
     VkPhysicalDevice dev = devices[i];
+
+    VkPhysicalDeviceProperties phy_prop[1];
+    vkGetPhysicalDeviceProperties( dev, phy_prop );
+    ts_period = phy_prop->limits.timestampPeriod;
 
     vkGetPhysicalDeviceQueueFamilyProperties( dev, &prop_cnt, NULL );
 
@@ -237,9 +264,12 @@ select_physical_device( VkInstance   instance,
     FATAL( "No acceptable device found" );
   }
 
-  *out_queue_idx         = graphics_queue;
-  *out_device_memory_idx = device_mem_idx;
-  *out_local_memory_idx  = local_mem_idx;
+  *out_queue_idx            = graphics_queue;
+  *out_device_memory_idx    = device_mem_idx;
+  *out_local_memory_idx     = local_mem_idx;
+
+  *out_queue_timestamp_bits = queue_ts_bits;
+  *out_timestamp_period     = ts_period;
   return device;
 }
 
@@ -861,10 +891,18 @@ app_init( app_t*     app,
                                                              app->window_surface,
                                                              &queue_idx,
                                                              &device_memory_idx,
-                                                             &local_memory_idx );
+                                                             &local_memory_idx,
+                                                             &app->queue_timestamp_bits,
+                                                             &app->queue_timestamp_period );
 
   LOG_INFO( "Graphics queue at idx %u. Local memory at %u, remote memory at %u",
             queue_idx, local_memory_idx, device_memory_idx );
+
+  uint32_t ts_khz = (uint32_t)(1e6f*(1/app->queue_timestamp_period));
+  LOG_INFO( "Timestamp period KHz %u (period %f), bits %u",
+            ts_khz,
+            app->queue_timestamp_period,
+            32- __builtin_clz( app->queue_timestamp_bits ) );
 
   open_device( app, physical_device, queue_idx );
   app->swapchain = create_swapchain( physical_device, app->device, app->window_surface,
@@ -952,6 +990,24 @@ app_init( app_t*     app,
     FATAL( "Failed to create command pool, err=%d", res );
   }
 
+  app->query_pools = malloc( app->n_swapchain_images * sizeof( *app->query_pools ) );
+
+  for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
+    VkQueryPoolCreateInfo qp_ci[] = {{
+      .sType              = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+      .pNext              = NULL,
+      .flags              = 0,
+      .queryType          = VK_QUERY_TYPE_TIMESTAMP,
+      .queryCount         = 3,
+      .pipelineStatistics = 0,    /* ignored */
+    }};
+
+    res = vkCreateQueryPool( app->device, qp_ci, NULL, &app->query_pools[i] );
+    if( UNLIKELY( res != VK_SUCCESS ) ) {
+      FATAL( "Failed to create query pool, err=%d", res );
+    }
+  }
+
   app->command_buffers = malloc( app->n_swapchain_images * sizeof( *app->command_buffers ) );
   if( UNLIKELY( !app->command_buffers ) ) {
     FATAL( "Failed to allocate" );
@@ -1008,14 +1064,24 @@ app_init( app_t*     app,
       .pClearValues    = clear,
     }};
 
+    vkCmdResetQueryPool( buffer, app->query_pools[i], 0, 4 );
+    vkCmdWriteTimestamp( buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, app->query_pools[i], 0 );
+
     vkCmdCopyBuffer( buffer, app->local_vertex_buffer, app->remote_vertex_buffer, 1, bc );
     vkCmdPipelineBarrier( buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT,
                           0, NULL, 0, NULL, 0, NULL );
+
+    // vkCmdWriteTimestamp( buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, app->query_pools[i], 1 );
+    vkCmdWriteTimestamp( buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, app->query_pools[i], 1 );
+
     vkCmdBeginRenderPass( buffer, render_pass_info, VK_SUBPASS_CONTENTS_INLINE );
     vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->graphics_pipeline );
     vkCmdBindVertexBuffers( buffer, 0, 1, &app->remote_vertex_buffer, &(VkDeviceSize){0} );
     vkCmdDraw( buffer, ARRAY_SIZE( triangle ), 1, 0, 0 );
     vkCmdEndRenderPass( buffer );
+
+    // vkCmdWriteTimestamp( buffer, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, app->query_pools[i], 2 );
+    vkCmdWriteTimestamp( buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, app->query_pools[i], 2 );
 
     res = vkEndCommandBuffer( buffer );
     if( UNLIKELY( res != VK_SUCCESS ) ) {
@@ -1130,12 +1196,14 @@ app_destroy( app_t* app )
 
   for( uint32_t i = 0; i < app->n_swapchain_images; ++i ) {
     vkDestroyFramebuffer( app->device, app->framebuffers[i], NULL );
+    vkDestroyQueryPool( app->device, app->query_pools[i], NULL );
   }
   free( app->framebuffers );
 
   vkDestroyCommandPool( app->device, app->command_pool, NULL );
 
   free( app->command_buffers );
+  free( app->query_pools );
 
   vkDestroyDevice( app->device, NULL );
 
@@ -1153,8 +1221,6 @@ mouse_button_callback( GLFWwindow* window,
   if( button != GLFW_MOUSE_BUTTON_LEFT ) return;
   if( action != GLFW_PRESS )             return;
 
-  uint64_t start = wallclock();
-
   app_t* app = glfwGetWindowUserPointer( window );
 
   double x, y;
@@ -1170,8 +1236,6 @@ mouse_button_callback( GLFWwindow* window,
 
   // FIXME skip the copy? just write straight to mapped memory?
   memcpy( app->mapped_vertex_memory, triangle, sizeof( triangle ) );
-
-  trace_click( app->tracer, start );
 }
 
 void
@@ -1222,7 +1286,6 @@ app_run( app_t* app )
 
     next_image_reset( trace_image, image_index );
     tracer_write_pup( app->tracer, trace_image );
-    trace_wait( app->tracer, start );
 
     // make sure the last render of this frame is finished
     res = vkWaitForFences( device, 1, &fence, VK_TRUE, UINT64_MAX );
@@ -1291,6 +1354,7 @@ app_run( app_t* app )
     if( current_frame >= max_frames_in_flight ) current_frame = 0; /* cmov */
 
     trace_frame_end( app->tracer, start );
+    trace_query_pool( app->tracer, app->device, app->query_pools[image_index], app->queue_timestamp_period, app->queue_timestamp_bits );
   }
 
   // wait for all outstanding requests to finish
